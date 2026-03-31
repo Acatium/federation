@@ -1,0 +1,15 @@
+-- Create the rangeradmin user and grant permissions that Ranger expects.
+--
+-- IMPORTANT: This file uses a placeholder password that MUST be replaced
+-- before deployment. Run the following from the project root:
+--
+--   source .env
+--   sed "s/CHANGEME_RANGER_DB_PASSWORD/$RANGER_DB_PASSWORD/" \
+--       deploy/init-ranger-db.sql.template > deploy/init-ranger-db.generated.sql
+--
+-- The generated file is gitignored and mounted by docker-compose.yml.
+-- The user-data.sh script does this substitution automatically for EC2.
+
+CREATE USER rangeradmin WITH PASSWORD 'CHANGEME_RANGER_DB_PASSWORD';
+GRANT ALL PRIVILEGES ON DATABASE ranger TO rangeradmin;
+ALTER DATABASE ranger OWNER TO rangeradmin;

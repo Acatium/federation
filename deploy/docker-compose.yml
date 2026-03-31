@@ -1,0 +1,267 @@
+# Federation Stack: Gravitino + Ranger + Trino
+# Deploy on EC2 r6i.xlarge (4 vCPU, 32 GB RAM) or equivalent
+#
+# Usage from project root:
+#   docker compose --env-file .env -f deploy/docker-compose.yml up -d
+#
+# Or copy .env into deploy/ first:
+#   cp .env deploy/.env && docker compose -f deploy/docker-compose.yml up -d
+
+services:
+  # --- Backend databases ---
+  mysql:
+    image: mysql:8.0
+    container_name: federation-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: gravitino
+      MYSQL_USER: gravitino
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  ranger-db:
+    image: postgres:15
+    container_name: federation-postgres
+    environment:
+      POSTGRES_DB: ranger
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${RANGER_DB_PASSWORD:?Set RANGER_DB_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-ranger-db.generated.sql:/docker-entrypoint-initdb.d/init-ranger-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # --- Solr for Ranger audit ---
+  ranger-solr:
+    image: solr:8.11
+    container_name: federation-solr
+    ports:
+      - "8983:8983"
+    environment:
+      # Enable soft commits so audit events become visible to queries
+      SOLR_OPTS: "-Dsolr.autoSoftCommit.maxTime=5000"
+    command: solr-precreate ranger_audits
+    volumes:
+      - solr-data:/var/solr
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8983/solr/ranger_audits/admin/ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+
+  # --- Apache Gravitino (1.1.0 with MySQL backend for persistent metadata) ---
+  # NOTE: The Gravitino /api/version endpoint may report a different version
+  # than the Docker image tag (it returns the API version, not the product version).
+  # Image tag 1.1.0 is correct; API version 0.7.0-incubating is the REST API spec version.
+  gravitino:
+    image: apache/gravitino:1.1.0
+    container_name: federation-gravitino
+    ports:
+      - "8090:8090"
+    environment:
+      # MySQL backend for persistent metadata (replaces ephemeral H2)
+      GRAVITINO_ENTITY_STORE: relational
+      GRAVITINO_ENTITY_STORE_RELATIONAL_JDBC_URL: jdbc:mysql://mysql:3306/gravitino?useSSL=false&allowPublicKeyRetrieval=true
+      GRAVITINO_ENTITY_STORE_RELATIONAL_JDBC_DRIVER: com.mysql.cj.jdbc.Driver
+      GRAVITINO_ENTITY_STORE_RELATIONAL_JDBC_USER: gravitino
+      GRAVITINO_ENTITY_STORE_RELATIONAL_JDBC_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      # AWS credentials for Glue Data Catalog + S3 (used by Iceberg GlueCatalog)
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${AWS_REGION:-us-east-2}
+      # Snowflake Open Catalog credentials (used by provision.sh for IRC registration)
+      SNOWFLAKE_OPEN_CATALOG_ACCOUNT: ${SNOWFLAKE_OPEN_CATALOG_ACCOUNT:-}
+      SNOWFLAKE_OPEN_CATALOG_CLIENT_ID: ${SNOWFLAKE_OPEN_CATALOG_CLIENT_ID:-}
+      SNOWFLAKE_OPEN_CATALOG_CLIENT_SECRET: ${SNOWFLAKE_OPEN_CATALOG_CLIENT_SECRET:-}
+      SNOWFLAKE_OPEN_CATALOG_CATALOG: ${SNOWFLAKE_OPEN_CATALOG_CATALOG:-federation_demo}
+      # Databricks credentials (used by provision.sh for IRC registration)
+      DATABRICKS_HOST: ${DATABRICKS_HOST:-}
+      DATABRICKS_TOKEN: ${DATABRICKS_TOKEN:-}
+      DATABRICKS_CATALOG: ${DATABRICKS_CATALOG:-}
+    volumes:
+      # Persistent extra JARs for Iceberg catalog (e.g., iceberg-aws-bundle for GlueCatalog)
+      # Run deploy/download-gravitino-jars.sh to populate this directory
+      - ./gravitino-libs/:/extra-libs/:ro
+    entrypoint: ["/bin/bash", "-c", "cp /extra-libs/*.jar /root/gravitino/catalogs/lakehouse-iceberg/libs/ 2>/dev/null; exec /root/gravitino/bin/start-gravitino.sh"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/api/version"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+    restart: unless-stopped
+
+  # --- Apache Ranger ---
+  ranger:
+    image: apache/ranger:2.7.0
+    container_name: federation-ranger
+    hostname: ranger
+    ports:
+      - "6080:6080"
+    environment:
+      # Database connection for Ranger policy store
+      db_host: ranger-db
+      db_root_user: postgres
+      db_root_password: ${RANGER_DB_PASSWORD:?Set RANGER_DB_PASSWORD in .env}
+      db_name: ranger
+      db_user: rangeradmin
+      db_password: ${RANGER_DB_PASSWORD:?Set RANGER_DB_PASSWORD in .env}
+      # Solr for audit logs
+      audit_solr_urls: http://ranger-solr:8983/solr/ranger_audits
+      audit_store: solr
+    depends_on:
+      ranger-db:
+        condition: service_healthy
+      ranger-solr:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6080/login.jsp"]
+      interval: 20s
+      timeout: 15s
+      retries: 20
+      start_period: 180s
+    restart: unless-stopped
+
+  # --- Trino 479 (direct catalogs + built-in Ranger plugin) ---
+  # Trino 479 includes built-in connectors: redshift, snowflake, hive, iceberg
+  # and built-in Ranger access-control plugin. No external plugins needed.
+  trino:
+    image: trinodb/trino:479
+    container_name: federation-trino
+    ports:
+      - "8080:8080"
+    environment:
+      # AWS credentials for S3/Iceberg access (passed through to Trino connectors)
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${AWS_REGION:-us-east-2}
+      # Redshift credentials (used by ${ENV:VAR} in catalog properties)
+      REDSHIFT_HOST: ${REDSHIFT_HOST:-}
+      REDSHIFT_PORT: ${REDSHIFT_PORT:-5439}
+      REDSHIFT_DATABASE: ${REDSHIFT_DATABASE:-dev}
+      REDSHIFT_USER: ${REDSHIFT_USER:-}
+      REDSHIFT_PASSWORD: ${REDSHIFT_PASSWORD:-}
+      # Snowflake credentials (used by ${ENV:VAR} in catalog properties)
+      SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_ACCOUNT:-}
+      SNOWFLAKE_USER: ${SNOWFLAKE_USER:-}
+      SNOWFLAKE_PASSWORD: ${SNOWFLAKE_PASSWORD:-}
+      SNOWFLAKE_DATABASE: ${SNOWFLAKE_DATABASE:-FEDERATION_DEMO}
+      SNOWFLAKE_ROLE: ${SNOWFLAKE_ROLE:-ACCOUNTADMIN}
+      SNOWFLAKE_WAREHOUSE: ${SNOWFLAKE_WAREHOUSE:-COMPUTE_WH}
+      # Glue Data Catalog ID (used by ${ENV:VAR} in hive/iceberg catalog properties)
+      GLUE_CATALOG_ID: ${GLUE_CATALOG_ID:-}
+      # Databricks credentials (used by ${ENV:VAR} in databricks catalog properties)
+      DATABRICKS_HOST: ${DATABRICKS_HOST:-}
+      DATABRICKS_TOKEN: ${DATABRICKS_TOKEN:-}
+      DATABRICKS_CATALOG: ${DATABRICKS_CATALOG:-}
+    volumes:
+      # Core Trino config
+      - ./trino-config/config.properties:/etc/trino/config.properties
+      - ./trino-config/jvm.config:/etc/trino/jvm.config
+      - ./trino-config/log.properties:/etc/trino/log.properties
+      # Ranger access control (built-in plugin in 479)
+      - ./trino-config/access-control.properties:/etc/trino/access-control.properties
+      - ./trino-config/ranger-trino-security.xml:/etc/trino/ranger-trino-security.xml
+      - ./trino-config/ranger-trino-audit.xml:/etc/trino/ranger-trino-audit.xml
+      # Catalog connectors (direct, no Gravitino proxy)
+      - ./trino-config/redshift.properties:/etc/trino/catalog/redshift.properties
+      - ./trino-config/hive.properties:/etc/trino/catalog/hive.properties
+      - ./trino-config/iceberg_s3.properties:/etc/trino/catalog/iceberg_s3.properties
+      - ./trino-config/snowflake.properties:/etc/trino/catalog/snowflake.properties
+      - ./trino-config/databricks.properties:/etc/trino/catalog/databricks.properties
+    depends_on:
+      gravitino:
+        condition: service_healthy
+      ranger:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+    restart: unless-stopped
+
+  # --- Test runner (on-demand, same Docker network as services) ---
+  # Usage: make test-docker
+  # Or:    docker compose --env-file .env -f deploy/docker-compose.yml --profile test run --rm test-runner
+  test-runner:
+    build:
+      context: ..
+      dockerfile: deploy/test-runner.Dockerfile
+    container_name: federation-test-runner
+    profiles: [test]
+    environment:
+      # Override hosts to use Docker service names (not external IPs)
+      GRAVITINO_HOST: gravitino
+      GRAVITINO_PORT: "8090"
+      RANGER_HOST: ranger
+      RANGER_PORT: "6080"
+      TRINO_HOST: trino
+      TRINO_PORT: "8080"
+      SOLR_HOST: ranger-solr
+      # AWS credentials
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${AWS_REGION:-us-east-2}
+      AWS_ACCOUNT_ID: ${AWS_ACCOUNT_ID:-}
+      GLUE_CATALOG_ID: ${GLUE_CATALOG_ID:-}
+      GLUE_DATABASE: ${GLUE_DATABASE:-federation_demo}
+      S3_BUCKET: ${S3_BUCKET:-}
+      SPECTRUM_ROLE_ARN: ${SPECTRUM_ROLE_ARN:-}
+      # Redshift
+      REDSHIFT_HOST: ${REDSHIFT_HOST:-}
+      REDSHIFT_PORT: ${REDSHIFT_PORT:-5439}
+      REDSHIFT_DATABASE: ${REDSHIFT_DATABASE:-dev}
+      REDSHIFT_USER: ${REDSHIFT_USER:-}
+      REDSHIFT_PASSWORD: ${REDSHIFT_PASSWORD:-}
+      # Snowflake
+      SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_ACCOUNT:-}
+      SNOWFLAKE_USER: ${SNOWFLAKE_USER:-}
+      SNOWFLAKE_PASSWORD: ${SNOWFLAKE_PASSWORD:-}
+      SNOWFLAKE_WAREHOUSE: ${SNOWFLAKE_WAREHOUSE:-COMPUTE_WH}
+      SNOWFLAKE_DATABASE: ${SNOWFLAKE_DATABASE:-FEDERATION_DEMO}
+      SNOWFLAKE_ROLE: ${SNOWFLAKE_ROLE:-}
+      # Snowflake Open Catalog
+      SNOWFLAKE_OPEN_CATALOG_ACCOUNT: ${SNOWFLAKE_OPEN_CATALOG_ACCOUNT:-}
+      SNOWFLAKE_OPEN_CATALOG_CLIENT_ID: ${SNOWFLAKE_OPEN_CATALOG_CLIENT_ID:-}
+      SNOWFLAKE_OPEN_CATALOG_CLIENT_SECRET: ${SNOWFLAKE_OPEN_CATALOG_CLIENT_SECRET:-}
+      SNOWFLAKE_OPEN_CATALOG_CATALOG: ${SNOWFLAKE_OPEN_CATALOG_CATALOG:-federation_demo}
+      # Databricks
+      DATABRICKS_HOST: ${DATABRICKS_HOST:-}
+      DATABRICKS_TOKEN: ${DATABRICKS_TOKEN:-}
+      DATABRICKS_CATALOG: ${DATABRICKS_CATALOG:-}
+      # Ranger
+      RANGER_ADMIN_USER: ${RANGER_ADMIN_USER:-admin}
+      RANGER_ADMIN_PASSWORD: ${RANGER_ADMIN_PASSWORD:-}
+      RANGER_USER_DEFAULT_PASSWORD: ${RANGER_USER_DEFAULT_PASSWORD:-}
+      RANGER_SERVICE: ${RANGER_SERVICE:-dev_trino}
+      # Trino
+      TRINO_USER: ${TRINO_USER:-test_user}
+      TRINO_HIVE_CATALOG: ${TRINO_HIVE_CATALOG:-hive}
+      ICEBERG_CATALOG: ${ICEBERG_CATALOG:-iceberg_s3}
+    volumes:
+      - ../data:/app/data
+      - ../reports:/app/reports
+    depends_on:
+      trino:
+        condition: service_healthy
+
+volumes:
+  mysql-data:
+  postgres-data:
+  solr-data:

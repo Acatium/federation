@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Ranger Trino plugin — audit configuration.
+     Sends access audit events to Solr for the Ranger audit console. -->
+<configuration>
+    <property>
+        <name>xasecure.audit.is.enabled</name>
+        <value>true</value>
+    </property>
+    <property>
+        <name>xasecure.audit.destination.solr</name>
+        <value>true</value>
+    </property>
+    <property>
+        <name>xasecure.audit.destination.solr.urls</name>
+        <value>http://ranger-solr:8983/solr/ranger_audits</value>
+    </property>
+    <property>
+        <name>xasecure.audit.destination.solr.batch.filespool.dir</name>
+        <value>/tmp/trino-ranger-audit-spool</value>
+    </property>
+</configuration>

@@ -1,0 +1,625 @@
+{
+  "timestamp": "2026-03-01T17:54:47-0500",
+  "total": 88,
+  "passed": 88,
+  "failed": 0,
+  "skipped": 0,
+  "results": {
+    "test_conclusion::test_metadata_plane": {
+      "module": "test_conclusion",
+      "function": "test_metadata_plane",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_conclusion::test_policy_plane": {
+      "module": "test_conclusion",
+      "function": "test_policy_plane",
+      "logs": [],
+      "duration_s": 0.001,
+      "status": "passed"
+    },
+    "test_conclusion::test_query_plane": {
+      "module": "test_conclusion",
+      "function": "test_query_plane",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_conclusion::test_discover_pattern": {
+      "module": "test_conclusion",
+      "function": "test_discover_pattern",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_conclusion::test_query_pattern": {
+      "module": "test_conclusion",
+      "function": "test_query_pattern",
+      "logs": [],
+      "duration_s": 7.433,
+      "status": "passed"
+    },
+    "test_conclusion::test_access_pattern_credential_vending": {
+      "module": "test_conclusion",
+      "function": "test_access_pattern_credential_vending",
+      "logs": [],
+      "duration_s": 0.341,
+      "status": "passed"
+    },
+    "test_conclusion::test_new_platform_didnt_change_existing_policies": {
+      "module": "test_conclusion",
+      "function": "test_new_platform_didnt_change_existing_policies",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_conclusion::test_new_platform_didnt_change_existing_queries": {
+      "module": "test_conclusion",
+      "function": "test_new_platform_didnt_change_existing_queries",
+      "logs": [],
+      "duration_s": 2.397,
+      "status": "passed"
+    },
+    "test_conclusion::test_identity_is_local_not_enterprise": {
+      "module": "test_conclusion",
+      "function": "test_identity_is_local_not_enterprise",
+      "logs": [],
+      "duration_s": 0.16,
+      "status": "passed"
+    },
+    "test_conclusion::test_immuta_enforcement_is_mock_only": {
+      "module": "test_conclusion",
+      "function": "test_immuta_enforcement_is_mock_only",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_conclusion::test_all_gaps_are_operational_not_architectural": {
+      "module": "test_conclusion",
+      "function": "test_all_gaps_are_operational_not_architectural",
+      "logs": [],
+      "duration_s": 0.004,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_single_identity_across_all_platforms": {
+      "module": "test_scenario1_the_report",
+      "function": "test_single_identity_across_all_platforms",
+      "logs": [],
+      "duration_s": 0.16,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_all_platforms_in_one_catalog": {
+      "module": "test_scenario1_the_report",
+      "function": "test_all_platforms_in_one_catalog",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_models_discoverable_alongside_data": {
+      "module": "test_scenario1_the_report",
+      "function": "test_models_discoverable_alongside_data",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_governance_tier_on_catalogs": {
+      "module": "test_scenario1_the_report",
+      "function": "test_governance_tier_on_catalogs",
+      "logs": [],
+      "duration_s": 0.394,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_tables_discoverable_without_platform_knowledge": {
+      "module": "test_scenario1_the_report",
+      "function": "test_tables_discoverable_without_platform_knowledge",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_all_catalogs_queryable_from_one_trino_session": {
+      "module": "test_scenario1_the_report",
+      "function": "test_all_catalogs_queryable_from_one_trino_session",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_hot_tier_redshift": {
+      "module": "test_scenario1_the_report",
+      "function": "test_hot_tier_redshift",
+      "logs": [],
+      "duration_s": 0.192,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_warm_tier_s3_parquet": {
+      "module": "test_scenario1_the_report",
+      "function": "test_warm_tier_s3_parquet",
+      "logs": [],
+      "duration_s": 0.18,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_cold_tier_iceberg": {
+      "module": "test_scenario1_the_report",
+      "function": "test_cold_tier_iceberg",
+      "logs": [],
+      "duration_s": 0.173,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_counterparty_reference_snowflake": {
+      "module": "test_scenario1_the_report",
+      "function": "test_counterparty_reference_snowflake",
+      "logs": [],
+      "duration_s": 1.13,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_risk_signals_databricks": {
+      "module": "test_scenario1_the_report",
+      "function": "test_risk_signals_databricks",
+      "logs": [],
+      "duration_s": 0.291,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_full_lifecycle_query": {
+      "module": "test_scenario1_the_report",
+      "function": "test_full_lifecycle_query",
+      "logs": [],
+      "duration_s": 0.731,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_hot_cold_join_by_jurisdiction": {
+      "module": "test_scenario1_the_report",
+      "function": "test_hot_cold_join_by_jurisdiction",
+      "logs": [],
+      "duration_s": 0.464,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_exposure_aggregation_by_jurisdiction": {
+      "module": "test_scenario1_the_report",
+      "function": "test_exposure_aggregation_by_jurisdiction",
+      "logs": [],
+      "duration_s": 0.249,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_spark_confirms_iceberg_data": {
+      "module": "test_scenario1_the_report",
+      "function": "test_spark_confirms_iceberg_data",
+      "logs": [],
+      "duration_s": 5.701,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_gravitino_provides_metadata_context": {
+      "module": "test_scenario1_the_report",
+      "function": "test_gravitino_provides_metadata_context",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_metadata_includes_governance_context": {
+      "module": "test_scenario1_the_report",
+      "function": "test_metadata_includes_governance_context",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_cortex_responds": {
+      "module": "test_scenario1_the_report",
+      "function": "test_cortex_responds",
+      "logs": [],
+      "duration_s": 0.774,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_cortex_writes_the_query": {
+      "module": "test_scenario1_the_report",
+      "function": "test_cortex_writes_the_query",
+      "logs": [],
+      "duration_s": 4.843,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_cross_platform_query_executes": {
+      "module": "test_scenario1_the_report",
+      "function": "test_cross_platform_query_executes",
+      "logs": [],
+      "duration_s": 0.876,
+      "status": "passed"
+    },
+    "test_scenario1_the_report::test_gravitino_metadata_richer_than_information_schema": {
+      "module": "test_scenario1_the_report",
+      "function": "test_gravitino_metadata_richer_than_information_schema",
+      "logs": [],
+      "duration_s": 0.152,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_trino_query_produces_solr_audit_event": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_trino_query_produces_solr_audit_event",
+      "logs": [],
+      "duration_s": 7.246,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_audit_identifies_the_analyst": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_audit_identifies_the_analyst",
+      "logs": [],
+      "duration_s": 7.227,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_audit_identifies_the_resource": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_audit_identifies_the_resource",
+      "logs": [],
+      "duration_s": 0.063,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_audit_records_authorization_result": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_audit_records_authorization_result",
+      "logs": [],
+      "duration_s": 0.063,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_policies_trace_to_source_platform": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_policies_trace_to_source_platform",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_policies_carry_extraction_timestamps": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_policies_carry_extraction_timestamps",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_row_count_matches_source": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_row_count_matches_source",
+      "logs": [],
+      "duration_s": 0.248,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_aggregation_matches_source_cent_for_cent": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_aggregation_matches_source_cent_for_cent",
+      "logs": [],
+      "duration_s": 0.245,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_all_source_tables_discoverable": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_all_source_tables_discoverable",
+      "logs": [],
+      "duration_s": 0.199,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_schema_matches_source": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_schema_matches_source",
+      "logs": [],
+      "duration_s": 0.235,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_policies_span_multiple_platforms": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_policies_span_multiple_platforms",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_single_api_returns_complete_policy_set": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_single_api_returns_complete_policy_set",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_spectrum_shows_dual_governance": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_spectrum_shows_dual_governance",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_entitlement_matrix_is_cross_platform": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_entitlement_matrix_is_cross_platform",
+      "logs": [],
+      "duration_s": 0.004,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_masking_policies_identifiable": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_masking_policies_identifiable",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_row_filter_policies_identifiable": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_row_filter_policies_identifiable",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_policies_carry_provenance_labels": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_policies_carry_provenance_labels",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_masking_policies_enforce_confidentiality": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_masking_policies_enforce_confidentiality",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_audit_trail_supports_accountability": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_audit_trail_supports_accountability",
+      "logs": [],
+      "duration_s": 0.061,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_cross_platform_entity_discovery": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_cross_platform_entity_discovery",
+      "logs": [],
+      "duration_s": 1.806,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_purpose_controls_defined": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_purpose_controls_defined",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_model_registry_in_catalog": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_model_registry_in_catalog",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario2_the_audit::test_segregation_of_duties": {
+      "module": "test_scenario2_the_audit",
+      "function": "test_segregation_of_duties",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_all_sync_gap_quadrants_produce_safe_outcomes": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_all_sync_gap_quadrants_produce_safe_outcomes",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_stale_allow_blocked_by_platform": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_stale_allow_blocked_by_platform",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_stale_deny_blocks_at_federation": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_stale_deny_blocks_at_federation",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_unauthorized_user_denied_at_trino": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_unauthorized_user_denied_at_trino",
+      "logs": [],
+      "duration_s": 0.096,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_no_policy_grants_everything_to_everyone": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_no_policy_grants_everything_to_everyone",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_governed_path_returns_data": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_governed_path_returns_data",
+      "logs": [],
+      "duration_s": 0.184,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_pii_masked_through_governed_path": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_pii_masked_through_governed_path",
+      "logs": [],
+      "duration_s": 0.345,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_pii_visible_at_source": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_pii_visible_at_source",
+      "logs": [],
+      "duration_s": 0.058,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_row_filter_constrains_visibility": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_row_filter_constrains_visibility",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_governed_path_generates_audit_trail": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_governed_path_generates_audit_trail",
+      "logs": [],
+      "duration_s": 7.24,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_ungoverned_path_has_no_federation_audit": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_ungoverned_path_has_no_federation_audit",
+      "logs": [],
+      "duration_s": 7.132,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_immuta_defines_purpose_based_access": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_immuta_defines_purpose_based_access",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_immuta_defines_column_level_masking": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_immuta_defines_column_level_masking",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_abac_to_rbac_translation_is_lossy_and_documented": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_abac_to_rbac_translation_is_lossy_and_documented",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_every_lossy_translation_is_labeled": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_every_lossy_translation_is_labeled",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_double_masking_documented": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_double_masking_documented",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_ranger_masking_policies_cover_pii": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_ranger_masking_policies_cover_pii",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_ranger_row_filter_policies_exist": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_ranger_row_filter_policies_exist",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_new_platform_registered_in_catalog": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_new_platform_registered_in_catalog",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_new_platform_policies_in_ranger": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_new_platform_policies_in_ranger",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_redshift_unaffected": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_redshift_unaffected",
+      "logs": [],
+      "duration_s": 0.398,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_snowflake_unaffected": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_snowflake_unaffected",
+      "logs": [],
+      "duration_s": 1.186,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_iceberg_unaffected": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_iceberg_unaffected",
+      "logs": [],
+      "duration_s": 0.174,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_prior_policies_intact": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_prior_policies_intact",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_every_engine_has_at_least_two_controls": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_every_engine_has_at_least_two_controls",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_trino_vs_spark_governance_delta": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_trino_vs_spark_governance_delta",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario3_the_failure_modes::test_direct_access_stack_differs_from_federated": {
+      "module": "test_scenario3_the_failure_modes",
+      "function": "test_direct_access_stack_differs_from_federated",
+      "logs": [],
+      "duration_s": 0.0,
+      "status": "passed"
+    },
+    "test_scenario4_the_identities::test_analyst_sees_masked_pii": {
+      "module": "test_scenario4_the_identities",
+      "function": "test_analyst_sees_masked_pii",
+      "logs": [],
+      "duration_s": 0.323,
+      "status": "passed"
+    },
+    "test_scenario4_the_identities::test_risk_investigator_sees_raw_pii": {
+      "module": "test_scenario4_the_identities",
+      "function": "test_risk_investigator_sees_raw_pii",
+      "logs": [],
+      "duration_s": 0.257,
+      "status": "passed"
+    },
+    "test_scenario4_the_identities::test_jurisdiction_filter_policy_differentiates_groups": {
+      "module": "test_scenario4_the_identities",
+      "function": "test_jurisdiction_filter_policy_differentiates_groups",
+      "logs": [],
+      "duration_s": 0.104,
+      "status": "passed"
+    },
+    "test_scenario4_the_identities::test_row_filter_policy_count_by_group": {
+      "module": "test_scenario4_the_identities",
+      "function": "test_row_filter_policy_count_by_group",
+      "logs": [],
+      "duration_s": 0.102,
+      "status": "passed"
+    },
+    "test_scenario4_the_identities::test_auditor_denied_risk_signals": {
+      "module": "test_scenario4_the_identities",
+      "function": "test_auditor_denied_risk_signals",
+      "logs": [],
+      "duration_s": 0.207,
+      "status": "passed"
+    },
+    "test_scenario4_the_identities::test_audit_captures_each_identity": {
+      "module": "test_scenario4_the_identities",
+      "function": "test_audit_captures_each_identity",
+      "logs": [],
+      "duration_s": 12.471,
+      "status": "passed"
+    }
+  }
+}

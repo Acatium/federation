@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.template
+.git
+.claude
+.venv
+__pycache__
+*.pyc
+*.pem
+*.key
+data/
+contracts/
+spec/
+jars/
+deploy/hive-lib/
+deploy/hive-lib-extra/
+deploy/trino-plugins/

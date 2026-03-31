@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Ranger Trino plugin — security configuration.
+     Connects the Trino access-control plugin to the Ranger admin server
+     for policy downloads and enforcement. -->
+<configuration>
+    <property>
+        <name>ranger.plugin.trino.service.name</name>
+        <value>dev_trino</value>
+        <description>Ranger service name matching the Trino service definition in Ranger admin.</description>
+    </property>
+    <property>
+        <name>ranger.plugin.trino.policy.source.impl</name>
+        <value>org.apache.ranger.admin.client.RangerAdminRESTClient</value>
+    </property>
+    <property>
+        <name>ranger.plugin.trino.policy.rest.url</name>
+        <value>http://ranger:6080</value>
+        <description>Ranger admin REST API endpoint (Docker service name).</description>
+    </property>
+    <property>
+        <name>ranger.plugin.trino.policy.pollIntervalMs</name>
+        <value>30000</value>
+        <description>How often (ms) to poll Ranger for policy updates.</description>
+    </property>
+    <property>
+        <name>ranger.plugin.trino.policy.cache.dir</name>
+        <value>/var/lib/trino/ranger-cache</value>
+    </property>
+    <property>
+        <name>ranger.plugin.trino.policy.rest.client.connection.timeoutMs</name>
+        <value>5000</value>
+    </property>
+    <property>
+        <name>ranger.plugin.trino.policy.rest.client.read.timeoutMs</name>
+        <value>10000</value>
+    </property>
+
+    <!-- Audit: send access events to Solr for the Ranger audit console -->
+    <property>
+        <name>xasecure.audit.is.enabled</name>
+        <value>true</value>
+    </property>
+    <property>
+        <name>xasecure.audit.destination.solr</name>
+        <value>true</value>
+    </property>
+    <property>
+        <name>xasecure.audit.destination.solr.urls</name>
+        <value>http://ranger-solr:8983/solr/ranger_audits</value>
+    </property>
+    <property>
+        <name>xasecure.audit.destination.solr.batch.filespool.dir</name>
+        <value>/tmp/trino-ranger-audit-spool</value>
+    </property>
+</configuration>
