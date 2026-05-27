@@ -1,0 +1,38 @@
+name: CI
+
+# Runs the offline-runnable unit suite on the default branch (main) and its PRs.
+# Scope: tests/unit only — the suite that needs NO infrastructure. The
+# validation / regulatory / positive tiers require a 6-container Docker stack
+# (Gravitino, Ranger, Trino, MySQL, Postgres, Solr) plus live AWS / Snowflake /
+# Databricks credentials, and are intentionally not run here.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit:
+    name: Unit tests (no infrastructure)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install deps needed by the unit suite
+        # src/extractors/__init__.py eagerly imports all extractors, so collecting
+        # tests/unit pulls in the platform SDKs even though the tests mock them.
+        # This is the minimal set that lets tests/unit run; the heavy runtime deps
+        # (pyspark, pyiceberg, adbc, trino) are only needed by the infra tiers.
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-timeout requests boto3 python-dotenv \
+                      polars jinja2 faker psycopg2-binary \
+                      snowflake-connector-python databricks-sdk
+
+      - name: Unit tests (incl. safe-by-default safety-matrix)
+        run: pytest tests/unit -v
