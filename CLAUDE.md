@@ -37,7 +37,8 @@ Every dataset tagged in Gravitino: `governance_tier: "platform_native" | "immuta
 
 ```bash
 source .venv/bin/activate
-pytest tests/validation/ -v --tb=short   # Validation suite (88 tests)
+pytest tests/unit                        # Offline unit suite (82) — no infra, runs in CI
+pytest tests/validation/ -v --tb=short   # Validation suite (88) — REQUIRES the 6-container stack + cloud creds
 python -m src.validators.contract_validator  # Check contracts
 ```
 
@@ -51,8 +52,9 @@ python -m src.validators.contract_validator  # Check contracts
 | S4: The Identities | `test_scenario4_the_identities.py` | 6 | Same SQL, different views per persona |
 | Conclusion | `test_conclusion.py` | 11 | Three planes, three access patterns, honest gaps |
 
-Legacy tests in `tests/positive/`, `tests/negative/`, `tests/arrow/` are excluded from
-results capture. The validation suite is the canonical test set.
+Other test tiers (`tests/unit/`, `tests/positive/`, `tests/regulatory/`, `tests/performance/`)
+exist alongside the validation suite; only the validation suite is captured into results.
+(`tests/negative/` and `tests/arrow/` do not exist — earlier docs referenced them in error.)
 
 ## Demo Notebooks
 
