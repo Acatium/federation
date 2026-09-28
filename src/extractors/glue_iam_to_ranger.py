@@ -34,22 +34,27 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Glue action -> Ranger access type mapping
-GLUE_ACTION_MAP: dict[str, str] = {
-    "glue:GetTable": "select",
-    "glue:GetTables": "select",
-    "glue:GetDatabase": "select",
-    "glue:GetDatabases": "select",
-    "glue:GetPartition": "select",
-    "glue:GetPartitions": "select",
-    "glue:BatchGetPartition": "select",
-    "glue:SearchTables": "select",
-    "glue:CreateTable": "create",
-    "glue:CreateDatabase": "create",
-    "glue:UpdateTable": "alter",
-    "glue:UpdateDatabase": "alter",
-    "glue:DeleteTable": "drop",
-    "glue:DeleteDatabase": "drop",
-    "glue:*": "all",
+# Glue IAM action -> the Ranger access types it makes possible. For a Lake
+# Formation-governed table IAM is a necessary condition, not the grant: a read
+# needs glue:GetTable here AND SELECT in Lake Formation. So GetTable enables
+# select (and show); listing and describe calls enable only show; partition calls
+# are needed for reads but grant nothing alone. Unlisted actions grant nothing.
+GLUE_ACTION_MAP: dict[str, tuple[str, ...]] = {
+    "glue:GetTable": ("select", "show"),
+    "glue:GetTables": ("show",),
+    "glue:GetDatabase": ("show",),
+    "glue:GetDatabases": ("show",),
+    "glue:SearchTables": ("show",),
+    "glue:GetPartition": (),
+    "glue:GetPartitions": (),
+    "glue:BatchGetPartition": (),
+    "glue:CreateTable": ("create",),
+    "glue:CreateDatabase": ("create",),
+    "glue:UpdateTable": ("alter",),
+    "glue:UpdateDatabase": ("alter",),
+    "glue:DeleteTable": ("drop",),
+    "glue:DeleteDatabase": ("drop",),
+    "glue:*": ("all",),
 }
 
 # IAM ARN patterns
@@ -82,16 +87,16 @@ def _arn_to_ranger_principal(arn: str) -> tuple[list[str], list[str]]:
     return [short_name], []
 
 
-def _map_glue_action(action: str) -> str:
-    """Map a Glue IAM action to a Ranger access type.
+def _map_glue_actions(actions: list[str]) -> list[str]:
+    """Map Glue IAM actions to the Ranger access types they make possible.
 
     Args:
-        action: IAM action string (e.g., "glue:GetTable").
+        actions: IAM action strings (e.g., ["glue:GetTable"]).
 
     Returns:
-        Ranger access type string (e.g., "select").
+        Sorted, de-duplicated Ranger access types; empty if none apply.
     """
-    return GLUE_ACTION_MAP.get(action, "select")
+    return sorted({t for action in actions for t in GLUE_ACTION_MAP.get(action, ())})
 
 
 class GlueIamExtractor(BaseExtractor):
@@ -192,20 +197,10 @@ class GlueIamExtractor(BaseExtractor):
                 elif isinstance(val, list):
                     principal_arns.extend(val)
 
-        # Map actions to Ranger accesses
-        ranger_accesses: list[dict[str, Any]] = []
-        for action in actions_raw:
-            access_type = _map_glue_action(action)
-            ranger_accesses.append({"type": access_type, "isAllowed": True})
-
-        # Deduplicate accesses
-        seen_types: set[str] = set()
-        deduped: list[dict[str, Any]] = []
-        for a in ranger_accesses:
-            if a["type"] not in seen_types:
-                deduped.append(a)
-                seen_types.add(a["type"])
-        ranger_accesses = deduped
+        # Map actions to Ranger accesses; a statement that enables none is skipped
+        ranger_accesses = [{"type": t, "isAllowed": True} for t in _map_glue_actions(actions_raw)]
+        if not ranger_accesses:
+            return []
 
         policies: list[dict[str, Any]] = []
         for arn in principal_arns:
@@ -333,12 +328,12 @@ class GlueIamExtractor(BaseExtractor):
                 )
                 continue
 
-            allowed_accesses: list[dict[str, Any]] = []
-            for result in resp.get("EvaluationResults", []):
-                if result.get("EvalDecision") == "allowed":
-                    action = result.get("EvalActionName", "")
-                    access_type = _map_glue_action(action)
-                    allowed_accesses.append({"type": access_type, "isAllowed": True})
+            allowed_actions = [
+                result.get("EvalActionName", "")
+                for result in resp.get("EvaluationResults", [])
+                if result.get("EvalDecision") == "allowed"
+            ]
+            allowed_accesses = [{"type": t, "isAllowed": True} for t in _map_glue_actions(allowed_actions)]
 
             if allowed_accesses:
                 role_name = spectrum_role.split("/")[-1]

@@ -46,10 +46,27 @@ contractors that only IAM allows get in when Glue/IAM runs last, and analysts th
 Lake Formation allows get in when it runs last
 (`tests/unit/test_authority_conflicts.py`).
 
-`FederatedSync` (`src/sync/federated.py`) extracts every source together, combines
-access policies that share a resource into the intersection of what each source allows
-(keeping every deny), and pushes one policy set. If any source fails to extract, nothing
-is pushed.
+`FederatedSync` (`src/sync/federated.py`) extracts every source together and pushes one
+policy set:
+
+- **It knows which sources govern which catalogs.** Lake Formation and Glue/IAM govern
+  `hive`; Immuta governs only the datasets it has registered (`DEFAULT_AUTHORITIES`). An
+  authority that governs a table but allows nothing on it denies it.
+- **It computes the AND per table.** Database-level and wildcard grants are expanded onto
+  each known table and intersected per principal, access type and column set; deny items
+  from any source are kept. A wildcard grant reaches a jointly governed table only if the
+  table is known, so pass an inventory of tables or it fails closed.
+- **A failed source fails closed where it governs.** Its jointly governed tables are denied
+  and its sole-authority allows are removed by reconciliation; other sources keep syncing.
+  If Immuta fails, its registrations are unknown, so it is treated as governing every
+  table in its catalogs until it recovers.
+- **It owns what the per-source syncs left.** Reconciliation also removes policies labelled
+  with a member source's old label.
+
+The price of the AND is that principals must match across sources. Lake Formation and
+IAM both name IAM roles, so they combine cleanly. Immuta grants to users and groups, so a
+table governed by Immuta and Lake Formation gives nobody access until the two share a
+principal mapping.
 
 ## Comparing the alternatives
 

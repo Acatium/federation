@@ -342,6 +342,10 @@ class BaseExtractor(ABC):
             policies.extend(page)
             start += len(page)
 
+    def _owned_labels(self) -> set[str]:
+        """Labels marking policies this extractor owns in Ranger."""
+        return {f"source:{self.source_name}"}
+
     def reconcile_removed(self, services: set[str] | None = None) -> dict[str, list[str]]:
         """Delete this source's allow policies that this run did not write.
 
@@ -363,14 +367,14 @@ class BaseExtractor(ABC):
                 "reconcile_removed needs a completed push_all on this instance; "
                 "without one every policy from this source would look stale"
             )
-        label = f"source:{self.source_name}"
+        owned = self._owned_labels()
         result: dict[str, list[str]] = {"deleted": [], "needs_review": []}
         stale: list[dict[str, Any]] = []
         for service in sorted((services or set()) | {RANGER_SERVICE}):
             stale.extend(
                 p
                 for p in self._list_policies(service)
-                if label in p.get("policyLabels", []) and p.get("id") not in self._written_ids
+                if owned & set(p.get("policyLabels", [])) and p.get("id") not in self._written_ids
             )
         for existing in stale:
             if existing.get("policyType", 0) != 0 or existing.get("denyPolicyItems"):
