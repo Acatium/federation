@@ -47,6 +47,22 @@ class TestMirror:
         assert group.worst_seconds == 0
         assert person.worst_seconds == T.batch_sync
 
+    def test_vended_credentials_outlive_a_platform_revocation(self) -> None:
+        short_sync = Timings(batch_sync=86_400, credential_ttl=3600)
+        result = exposure_after_revocation(
+            Scenario(Pattern.MIRROR, IdentityMode.PASSTHROUGH, vended_credentials=True), short_sync
+        )
+        assert result.worst_seconds == 3600
+        assert "credentials" in result.closed_by
+
+    def test_the_mirror_sync_cuts_vended_credentials_short(self) -> None:
+        result = exposure(Pattern.MIRROR, IdentityMode.PASSTHROUGH, vended_credentials=True)
+        assert result.worst_seconds == min(T.credential_ttl, T.batch_sync)
+
+    def test_vended_credentials_do_not_change_the_shared_account_window(self) -> None:
+        result = exposure(Pattern.MIRROR, IdentityMode.SERVICE_ACCOUNT, vended_credentials=True)
+        assert result.worst_seconds == T.batch_sync
+
 
 class TestPatternsThatEnforceBelowTheEngine:
     @pytest.mark.parametrize("pattern", [Pattern.PUSH_DOWN, Pattern.CATALOG_AUTHORITY])
@@ -83,7 +99,7 @@ class TestComparison:
 
     def test_tables_cover_every_pattern(self) -> None:
         assert set(COVERAGE) == set(Pattern)
-        assert exposure_table().count("\n") == 6
+        assert exposure_table().count("\n") == 7
         for pattern in Pattern:
             assert pattern.value in coverage_table()
 

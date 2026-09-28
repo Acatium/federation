@@ -201,7 +201,7 @@ Same pattern — add `http_scheme` from env var to `trino.dbapi.connect()` calls
 Update Trino connection cells to include `http_scheme=os.getenv('TRINO_SCHEME', 'http')`.
 
 **Files:**
-- `notebooks/safe-by-default.ipynb`
+- `notebooks/stale-allow-leak.ipynb (formerly safe-by-default.ipynb)`
 - `notebooks/spectrum-proof-point.ipynb`
 - `notebooks/governance-comparison.ipynb`
 
@@ -343,7 +343,7 @@ Update `.PHONY` to include new targets.
 | `tests/conftest.py` | EDIT (HTTPS support in 6 fixtures) |
 | `src/arrow/comparison.py` | EDIT (HTTPS support) |
 | `src/arrow/benchmarks.py` | EDIT (HTTPS support) |
-| `notebooks/safe-by-default.ipynb` | EDIT (HTTPS support) |
+| `notebooks/stale-allow-leak.ipynb (formerly safe-by-default.ipynb)` | EDIT (HTTPS support) |
 | `notebooks/spectrum-proof-point.ipynb` | EDIT (HTTPS support) |
 | `notebooks/governance-comparison.ipynb` | EDIT (HTTPS support) |
 | `deploy/provision.sh` | EDIT (HTTPS URLs) |

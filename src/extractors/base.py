@@ -302,6 +302,55 @@ class BaseExtractor(ABC):
                 return success
         return success
 
+    def reconcile_removed(self, current: list[dict[str, Any]]) -> dict[str, list[str]]:
+        """Delete this source's allow policies that the source no longer grants.
+
+        A mirror that only creates and updates keeps a revoked grant forever: the
+        policy simply stops appearing in the extraction. ``current`` is the merged
+        set just pushed. Only policies labelled ``source:<this source>`` are
+        considered, so one extractor never removes another's. Only plain allow
+        policies are deleted; removing a masking, row-filter or deny policy would
+        widen access, so those are reported for review instead.
+
+        Returns ``{"deleted": [...], "needs_review": [...]}`` by policy name.
+        """
+        label = f"source:{self.source_name}"
+        keep = {(p.get("service", RANGER_SERVICE), p.get("name")) for p in current}
+        result: dict[str, list[str]] = {"deleted": [], "needs_review": []}
+        for service in sorted({svc for svc, _ in keep} | {RANGER_SERVICE}):
+            resp = requests.get(
+                f"{RANGER_API}/policy",
+                params={"serviceName": service},
+                auth=RANGER_AUTH,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            for existing in resp.json():
+                if label not in existing.get("policyLabels", []):
+                    continue
+                if (service, existing.get("name")) in keep:
+                    continue
+                widens_access = existing.get("policyType", 0) != 0 or existing.get("denyPolicyItems")
+                if widens_access:
+                    result["needs_review"].append(existing["name"])
+                    continue
+                requests.delete(
+                    f"{RANGER_API}/policy/{existing['id']}",
+                    auth=RANGER_AUTH,
+                    timeout=30,
+                ).raise_for_status()
+                result["deleted"].append(existing["name"])
+        if result["deleted"] or result["needs_review"]:
+            logger.warning(
+                "Reconciled %s: deleted %d revoked allow policies; %d removed masking/deny "
+                "policies need review: %s",
+                self.source_name,
+                len(result["deleted"]),
+                len(result["needs_review"]),
+                result["needs_review"],
+            )
+        return result
+
     @staticmethod
     def _resource_key(policy: dict[str, Any]) -> tuple:
         """Return a hashable key for the policy's resource scope + type + priority."""
@@ -867,6 +916,13 @@ class BaseExtractor(ABC):
 
         self.push_all(policies)
 
+        # Remove what the source stopped granting. Skipped when the push aborted or
+        # the extraction came back empty, which more likely means an outage than
+        # a platform with no grants at all.
+        reconciled: dict[str, list[str]] = {"deleted": [], "needs_review": []}
+        if not self._aborted and policies:
+            reconciled = self.reconcile_removed(self._merge_by_resource(policies))
+
         # Only save snapshot if push was not aborted
         if not self._aborted:
             self._save_snapshot(policies)
@@ -882,6 +938,8 @@ class BaseExtractor(ABC):
             "policies_extracted": len(policies),
             "policies_pushed": self.policies_pushed,
             "policies_failed": self.policies_failed,
+            "policies_deleted": reconciled["deleted"],
+            "removed_policies_needing_review": reconciled["needs_review"],
             "extraction_ts": self._extraction_ts,
             "drift": drift,
         }

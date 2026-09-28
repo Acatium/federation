@@ -1,6 +1,16 @@
 """Four ways to govern access across several data platforms, compared on one event.
 
-The event is a revocation: a person loses access to a table at the source of truth.
+This is a model, not a measurement: its conclusions follow from the enforcement
+rules written below, and the tests check the code against those rules. The
+evidence that the rules match a real deployment is the request simulator in
+``safety_model.py`` and the live revoke-at-source test in
+``tests/validation/test_scenario3_the_failure_modes.py``.
+
+The event is a revocation: a person loses access to a table at the pattern's own
+source of truth. For MIRROR that is the platform; for PUSH_DOWN the central
+policy store; for CATALOG_AUTHORITY the catalog; for ENGINE_ENFORCEMENT the
+engine's policy store. If people revoke at the platform instead, engine
+enforcement inherits the mirror's sync window.
 Each pattern is scored on how long that person can still read the data afterwards
 (the exposure window), on how that depends on the identity the connector presents,
 and on which kinds of estate the pattern can reach.
@@ -13,7 +23,7 @@ comparison table in the README.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
 from src.governance.safety_model import EnforcementState, IdentityMode, analyze_sync_gap
@@ -50,6 +60,9 @@ class Scenario:
     identity: IdentityMode
     scope: RevocationScope = RevocationScope.PERSON
     event_driven: bool = False  # MIRROR only: event-fed rather than batch sync
+    # MIRROR only: the platform vends storage credentials (Unity Catalog here) rather
+    # than checking each query, so its own revocation waits for those to expire.
+    vended_credentials: bool = False
 
 
 @dataclass(frozen=True)
@@ -95,11 +108,19 @@ def exposure_after_revocation(scenario: Scenario, timings: Timings = Timings()) 
             identity,
             service_account_allows=not _sees_the_person(identity, scenario.scope),
         )
-        if not outcome.access_granted:
+        sync = (
+            Exposure(scenario, timings.event_sync, timings.event_sync, "mirror, on the change event")
+            if scenario.event_driven
+            else _window(scenario, timings.batch_sync, "mirror, at the next sync")
+        )
+        if outcome.access_granted:
+            return sync
+        if not scenario.vended_credentials:
             return Exposure(scenario, 0.0, 0.0, "platform, immediately")
-        if scenario.event_driven:
-            return Exposure(scenario, timings.event_sync, timings.event_sync, "mirror, on the change event")
-        return _window(scenario, timings.batch_sync, "mirror, at the next sync")
+        # The platform has revoked, but credentials it already vended stay valid;
+        # whichever comes first, their expiry or the mirror's sync, cuts access.
+        ttl = _window(scenario, timings.credential_ttl, "vended credentials expiring")
+        return ttl if ttl.worst_seconds <= sync.worst_seconds else sync
 
     if pattern is Pattern.PUSH_DOWN:
         # Native controls are written per person. A connector that logs in as a
@@ -191,17 +212,21 @@ IDENTITY_COLUMNS = (
 def exposure_table(timings: Timings = Timings()) -> str:
     """Markdown table: exposure after one person's access is revoked."""
     rows = [
-        ("Mirror, batch sync", Pattern.MIRROR, False),
-        ("Mirror, event-driven sync", Pattern.MIRROR, True),
-        ("Push down to native controls", Pattern.PUSH_DOWN, False),
-        ("Catalog as authority", Pattern.CATALOG_AUTHORITY, False),
-        ("Enforce in the engine", Pattern.ENGINE_ENFORCEMENT, False),
+        ("Mirror, batch sync", Scenario(Pattern.MIRROR, IdentityMode.PASSTHROUGH)),
+        ("Mirror, event-driven sync", Scenario(Pattern.MIRROR, IdentityMode.PASSTHROUGH, event_driven=True)),
+        (
+            "Mirror, batch sync, over vended credentials",
+            Scenario(Pattern.MIRROR, IdentityMode.PASSTHROUGH, vended_credentials=True),
+        ),
+        ("Push down to native controls", Scenario(Pattern.PUSH_DOWN, IdentityMode.PASSTHROUGH)),
+        ("Catalog as authority", Scenario(Pattern.CATALOG_AUTHORITY, IdentityMode.PASSTHROUGH)),
+        ("Enforce in the engine", Scenario(Pattern.ENGINE_ENFORCEMENT, IdentityMode.PASSTHROUGH)),
     ]
     header = "| Pattern | " + " | ".join(name for name, _ in IDENTITY_COLUMNS) + " |"
     lines = [header, "|" + "---|" * (len(IDENTITY_COLUMNS) + 1)]
-    for label, pattern, event in rows:
+    for label, base in rows:
         cells = [
-            _cell(exposure_after_revocation(Scenario(pattern, mode, event_driven=event), timings))
+            _cell(exposure_after_revocation(replace(base, identity=mode), timings))
             for _, mode in IDENTITY_COLUMNS
         ]
         lines.append(f"| {label} | " + " | ".join(cells) + " |")

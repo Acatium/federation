@@ -112,9 +112,12 @@ class UnityCatalogExtractor(BaseExtractor):
             page = {**page, "page_token": token}
 
     def _permissions(self, securable: str, full_name: str) -> dict[str, Any]:
-        """Read one securable's grants, or refuse to continue with a partial picture."""
+        """Read every page of one securable's grants, or refuse a partial picture."""
         try:
-            return self._api_get(f"/permissions/{securable}/{full_name}")
+            assignments = self._api_list(
+                f"/permissions/{securable}/{full_name}", "privilege_assignments", {}
+            )
+            return {"privilege_assignments": assignments}
         except http_requests.RequestException as exc:
             raise ExtractionIncompleteError(
                 f"could not read {securable} permissions for {full_name!r}: {exc}"

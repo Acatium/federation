@@ -12,7 +12,8 @@ patterns. Several security configurations are appropriate for development but
 - No secrets logged (verified by audit)
 - No containers run as root
 - Ranger audit trail enabled (Solr)
-- Safe-by-default architecture: sync gap creates noise, not risk
+- Policy mirror never grants more than the source, and sync deletes revoked allows
+- Known exposure: with shared connector accounts, a stale Ranger allow is readable until the next sync (`notebooks/stale-allow-leak.ipynb`)
 
 ## Production Hardening Checklist
 
@@ -93,11 +94,11 @@ jdbc:mysql://mysql:3306/gravitino?useSSL=true&requireSSL=true
 
 ## Threat Model
 
-The safe-by-default architecture provides defense in depth:
+Defense in depth holds per user only where the platform sees the end user. The connectors here use shared service accounts, so the platform limits what the connector can reach, not what each person may see:
 
 | Threat | Mitigation |
 |--------|-----------|
-| Stale Ranger allow (over-permissive) | Platform-native enforcement is the backstop |
+| Stale Ranger allow (over-permissive) | With passthrough, the platform blocks the user. As deployed (shared accounts), none until the next sync: data is exposed for the sync window. Shorten it with event-driven sync; remove it with passthrough |
 | Stale Ranger deny (under-permissive) | User blocked until sync — fail-closed |
 | Ranger compromise | Platform-native enforcement remains intact |
 | Trino compromise | Source platform credentials limit blast radius |

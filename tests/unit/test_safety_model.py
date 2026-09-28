@@ -1,10 +1,10 @@
-"""Pure unit tests for the safe-by-default safety model — no infrastructure.
+"""Pure unit tests for the safety model — no infrastructure.
 
-These exercise `src/governance/safety_model.py` directly: the computed (not
-hardcoded) safety analysis for every Ranger×platform sync-gap combination, the
-staleness scenarios, the per-engine governance stacks, and the Arrow transport
-governance table. They run offline with no DB, network, or cloud credentials —
-the same property the rest of `tests/unit/` has.
+These exercise `src/governance/safety_model.py` directly: the sync-gap outcome
+for every Ranger×platform combination under each identity mode, the staleness
+scenarios, the per-engine governance stacks, and the Arrow transport governance
+table. Every sync-gap test names the identity mode it covers; this repository
+is deployed with shared service accounts (`IdentityMode.SERVICE_ACCOUNT`).
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from src.governance.safety_model import (
     STALENESS_SCENARIOS,
     SYNC_GAP_QUADRANTS,
     EnforcementState,
+    IdentityMode,
     all_access_patterns,
     analyze_sync_gap,
     compute_governance_delta,
@@ -24,12 +25,14 @@ from src.governance.safety_model import (
     get_engine_governance_stack,
 )
 
+AS_DEPLOYED = IdentityMode.SERVICE_ACCOUNT
+PASSTHROUGH = IdentityMode.PASSTHROUGH
 
-class TestSyncGapSafety:
-    """The core safe-by-default property: every state combination is safe."""
+
+class TestSyncGapWithPassthrough:
+    """With identity passthrough, every state combination is safe."""
 
     def test_all_four_canonical_quadrants_are_safe(self) -> None:
-        """For all four canonical quadrants, the computed outcome is safe."""
         assert set(SYNC_GAP_QUADRANTS) == {
             "over_permissive_ranger",
             "under_permissive_ranger",
@@ -37,48 +40,62 @@ class TestSyncGapSafety:
             "both_deny",
         }
         for name, (ranger, platform) in SYNC_GAP_QUADRANTS.items():
-            outcome = analyze_sync_gap(ranger, platform)
+            outcome = analyze_sync_gap(ranger, platform, PASSTHROUGH)
             assert outcome.is_safe, f"quadrant {name} computed as UNSAFE"
 
     def test_every_possible_state_combination_is_safe(self) -> None:
-        """Exhaustively: no Ranger×platform pair yields an unsafe outcome."""
         for ranger in EnforcementState:
             for platform in EnforcementState:
-                outcome = analyze_sync_gap(ranger, platform)
+                outcome = analyze_sync_gap(ranger, platform, PASSTHROUGH)
                 assert outcome.is_safe, f"unsafe: ranger={ranger}, platform={platform}"
 
     def test_access_requires_both_layers_to_allow(self) -> None:
-        """Logical AND: access is granted only when both layers allow."""
         allow_states = (EnforcementState.ALLOW, EnforcementState.STALE_ALLOW)
         for ranger in EnforcementState:
             for platform in EnforcementState:
-                outcome = analyze_sync_gap(ranger, platform)
+                outcome = analyze_sync_gap(ranger, platform, PASSTHROUGH)
                 expected = ranger in allow_states and platform in allow_states
                 assert outcome.access_granted is expected
 
     def test_over_permissive_ranger_is_blocked_by_platform(self) -> None:
-        """Stale ALLOW in Ranger but platform DENY → blocked at source (no leak)."""
-        outcome = analyze_sync_gap(EnforcementState.STALE_ALLOW, EnforcementState.DENY)
+        outcome = analyze_sync_gap(EnforcementState.STALE_ALLOW, EnforcementState.DENY, PASSTHROUGH)
         assert outcome.access_granted is False
-        assert outcome.is_safe is True
         assert outcome.outcome_type == "platform_backstop"
 
-    def test_under_permissive_ranger_fails_closed(self) -> None:
-        """Stale DENY in Ranger but platform ALLOW → user blocked at Ranger (fail-closed)."""
-        outcome = analyze_sync_gap(EnforcementState.STALE_DENY, EnforcementState.ALLOW)
+
+class TestSyncGapAsDeployed:
+    """With the shared service accounts this repository deploys, one quadrant leaks."""
+
+    def test_over_permissive_ranger_leaks(self) -> None:
+        outcome = analyze_sync_gap(EnforcementState.STALE_ALLOW, EnforcementState.DENY, AS_DEPLOYED)
+        assert outcome.access_granted is True
+        assert outcome.is_safe is False
+
+    def test_only_the_over_permissive_quadrant_is_unsafe(self) -> None:
+        unsafe = {
+            name
+            for name, (ranger, platform) in SYNC_GAP_QUADRANTS.items()
+            if not analyze_sync_gap(ranger, platform, AS_DEPLOYED).is_safe
+        }
+        assert unsafe == {"over_permissive_ranger"}
+
+    @pytest.mark.parametrize("mode", list(IdentityMode))
+    def test_under_permissive_ranger_fails_closed_in_every_mode(self, mode: IdentityMode) -> None:
+        outcome = analyze_sync_gap(EnforcementState.STALE_DENY, EnforcementState.ALLOW, mode)
         assert outcome.access_granted is False
-        assert outcome.is_safe is True
         assert outcome.outcome_type == "fail_closed"
 
 
 class TestStalenessScenarios:
-    """Catalog sync-drift scenarios are safe by construction."""
-
-    def test_all_staleness_scenarios_are_safe(self) -> None:
+    def test_all_staleness_scenarios_are_safe_with_passthrough(self) -> None:
         assert len(STALENESS_SCENARIOS) > 0
         for name, scenario in STALENESS_SCENARIOS.items():
-            assert scenario.is_safe, f"staleness scenario {name} is not safe"
-            assert scenario.outcome in ("fail-safe", "fail-closed")
+            assert scenario.is_safe_under(PASSTHROUGH), f"staleness scenario {name} is not safe"
+            assert scenario.outcome_under(PASSTHROUGH) in ("fail-safe", "fail-closed")
+
+    def test_as_deployed_only_the_stale_allow_scenario_is_unsafe(self) -> None:
+        unsafe = {n for n, sc in STALENESS_SCENARIOS.items() if not sc.is_safe_under(AS_DEPLOYED)}
+        assert unsafe == {"stale_allow_ranger"}
 
 
 class TestGovernanceStacks:

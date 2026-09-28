@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Reference implementation proving federated metadata, policy, and query execution
+Reference implementation testing federated metadata, policy, and query execution
 across real AWS (Glue/Redshift/Spectrum/Lake Formation), Databricks (Unity Catalog),
 and Snowflake using Apache Gravitino, Trino, and Apache Ranger.
 
@@ -49,7 +49,7 @@ python -m src.validators.contract_validator  # Check contracts
 |----------|------|-------|---------------|
 | S1: The Report | `test_scenario1_the_report.py` | 21 | Discover → Build → Insight across 5 platforms |
 | S2: The Audit | `test_scenario2_the_audit.py` | 23 | Numeric fidelity, audit trail, unified entitlements |
-| S3: Failure Modes | `test_scenario3_the_failure_modes.py` | 27 | Safe-by-default, governance contrast, FGAC, evolution |
+| S3: Failure Modes | `test_scenario3_the_failure_modes.py` | 29 | Identity-dependent safety (incl. live stale-allow leak), governance contrast, FGAC, evolution |
 | S4: The Identities | `test_scenario4_the_identities.py` | 6 | Same SQL, different views per persona |
 | Conclusion | `test_conclusion.py` | 11 | Three planes, three access patterns, honest gaps |
 
@@ -65,7 +65,7 @@ jupyter lab --no-browser --port=8888
 ```
 
 Three notebooks:
-- **safe-by-default.ipynb** — Live revoke-at-source demo proving the safety property.
+- **stale-allow-leak.ipynb** — Live revoke-at-source demo: through the shared connector, a revoked user reads data until the Ranger sync.
 - **spectrum-proof-point.ipynb** — Dual entitlement trees (Redshift RBAC + Lake Formation) unified in Ranger.
 - **governance-comparison.ipynb** — Arrow query paths with governance delta and latency chart.
 

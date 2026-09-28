@@ -43,15 +43,23 @@ centrally and push it into each platform's native controls, make one catalog the
 engine such as OPA or Ranger's plugin.
 
 `src/governance/patterns.py` compares them on one event: a person's access is revoked at
-the source of truth. How long can they still read the data? The timings are example
+the pattern's own source of truth (the platform for a mirror, the central store for
+push-down, the catalog for a catalog authority, the engine's policy store for engine
+enforcement). How long can they still read the data? It is a model: its conclusions follow
+from the enforcement rules it encodes. The evidence that the mirror rows match a real
+deployment is the live test below; the other rows are reasoning, not measurement. The timings are example
 assumptions (15-minute batch sync, 30-second event feed, 60-second push and decision cache,
 one-hour vended credentials); change them in `Timings` and regenerate the table with
-`python -m src.governance.patterns`.
+`python -m src.governance.patterns`. The Databricks path in this repository is itself a
+catalog authority (Unity Catalog vends the storage credentials), so mirroring over it is
+bounded by those credentials as well as by the sync. If people revoke at the platform
+rather than in the engine's store, engine enforcement inherits the mirror's sync window.
 
 | Pattern | Passthrough | Per-group accounts | Shared account |
 |---|---|---|---|
 | Mirror, batch sync | 0 | ≤ 15 min (avg 7.5 min) | ≤ 15 min (avg 7.5 min) |
 | Mirror, event-driven sync | 0 | 30 s | 30 s |
+| Mirror, batch sync, over vended credentials | ≤ 15 min (avg 7.5 min) | ≤ 15 min (avg 7.5 min) | ≤ 15 min (avg 7.5 min) |
 | Push down to native controls | 60 s | **never** | **never** |
 | Catalog as authority | ≤ 60 min (avg 30 min) | **never** | **never** |
 | Enforce in the engine | ≤ 60 s (avg 30 s) | ≤ 60 s (avg 30 s) | ≤ 60 s (avg 30 s) |
@@ -61,6 +69,11 @@ Push-down and catalog policies are written for people; when the query arrives as
 account, they never match the revoked person. Enforcing in the engine, where the person is
 still visible, bounds exposure whatever credential the engine uses downstream, and a mirror
 feeding the engine inherits that bound plus its sync window.
+
+`notebooks/stale-allow-leak.ipynb` and
+`test_stale_allow_leaks_through_the_shared_connector` run the mirror row against live
+Redshift: revoke the user at the source, query through Trino and get rows back, sync, and
+get refused.
 
 Estates differ in which patterns they can use at all:
 
@@ -89,10 +102,12 @@ Estates differ in which patterns they can use at all:
    object storage with static credentials bypass every control above. Vended, scoped
    credentials keep the platform's enforcement in the path (`ARROW_TRANSPORTS` in the
    safety model).
-5. **Never let the mirror grant more than the source.** Privileges with no data-access
-   meaning, such as `BROWSE` and `MANAGE`, map to nothing, and an extraction that cannot
-   read every grant is refused rather than pushed half-complete
-   (`src/extractors/uc_to_ranger.py`).
+5. **Never let the mirror grant more than the source, and delete what it stops granting.**
+   Privileges with no data-access meaning, such as `BROWSE` and `MANAGE`, map to nothing;
+   an extraction that cannot read every grant is refused rather than pushed half-complete
+   (`src/extractors/uc_to_ranger.py`); and each sync deletes this source's allow policies
+   the platform no longer grants, while reporting removed masking and deny policies for
+   review rather than deleting them (`BaseExtractor.reconcile_removed`).
 6. **Label what translation loses.** Immuta's purpose-based rules do not fit Ranger's role
    model; each policy carries labels for what was lost rather than dropping it silently.
 
@@ -178,7 +193,7 @@ src/
   mocks/        Mock Immuta API
 tests/          unit · positive · regulatory · validation · performance
 deploy/         docker-compose stack and provisioning
-notebooks/      Walkthroughs of the safety model and query paths
+notebooks/      Live walkthroughs: the stale-allow leak, Spectrum, query paths
 ```
 
 ## License

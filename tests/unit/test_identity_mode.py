@@ -90,7 +90,7 @@ class TestStalenessIsComputedFromState:
             ranger_state=EnforcementState.STALE_DENY,
             platform_state=EnforcementState.ALLOW,
         )
-        assert misleading.outcome == "fail-closed"
+        assert misleading.outcome_under(IdentityMode.PASSTHROUGH) == "fail-closed"
 
 
 # ---------------------------------------------------------------------------
@@ -222,3 +222,137 @@ class TestUnityCatalogReads:
         monkeypatch.setattr(extractor._session, "get", fail)
         with pytest.raises(ExtractionIncompleteError):
             extractor._get_table_permissions("risk", "exposures")
+
+
+def _policy(**overrides: Any) -> dict[str, Any]:
+    policy: dict[str, Any] = {
+        "policyType": 0,
+        "isEnabled": True,
+        "resources": {
+            "catalog": {"values": ["databricks"]},
+            "schema": {"values": ["risk"]},
+            "table": {"values": ["*"]},
+            "column": {"values": ["*"]},
+        },
+        "policyItems": [{"users": [ANALYST.name], "groups": [], "accesses": [{"type": "select", "isAllowed": True}]}],
+    }
+    policy.update(overrides)
+    return policy
+
+
+class TestRangerEvaluation:
+    def test_wildcard_patterns_match(self) -> None:
+        policy = _policy()
+        policy["resources"]["table"] = {"values": ["expo*"]}
+        assert ranger_decision([policy], _request("exposures"))
+        assert not ranger_decision([policy], _request("counterparties"))
+
+    def test_is_excludes_inverts_the_match(self) -> None:
+        policy = _policy()
+        policy["resources"]["table"] = {"values": ["exposures"], "isExcludes": True}
+        assert not ranger_decision([policy], _request("exposures"))
+        assert ranger_decision([policy], _request("counterparties"))
+
+    def test_allow_exceptions_remove_the_allow(self) -> None:
+        policy = _policy(allowExceptions=[{"users": [ANALYST.name], "accesses": [{"type": "select"}]}])
+        assert not ranger_decision([policy], _request())
+
+    def test_deny_wins_unless_excepted(self) -> None:
+        deny = [{"groups": ["risk_analysts"], "accesses": [{"type": "select"}]}]
+        assert not ranger_decision([_policy(denyPolicyItems=deny)], _request())
+        excepted = _policy(
+            denyPolicyItems=deny,
+            denyExceptions=[{"users": [ANALYST.name], "accesses": [{"type": "select"}]}],
+        )
+        assert ranger_decision([excepted], _request())
+
+
+class TestUnityCatalogPermissionPages:
+    def test_reads_every_page_of_grants(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        pages = {
+            None: {"privilege_assignments": [{"principal": "a@example.com", "privileges": ["SELECT"]}], "next_page_token": "p2"},
+            "p2": {"privilege_assignments": [{"principal": "b@example.com", "privileges": ["SELECT"]}]},
+        }
+        extractor = UnityCatalogExtractor()
+        monkeypatch.setattr(
+            extractor._session,
+            "get",
+            lambda url, params, timeout: _Response(pages[params.get("page_token")]),
+        )
+        grants = extractor._get_table_permissions("risk", "exposures")
+        assert {g["principal"] for g in grants} == {"a@example.com", "b@example.com"}
+
+
+# ---------------------------------------------------------------------------
+# Sync must delete what the source stopped granting
+# ---------------------------------------------------------------------------
+
+
+class _FakeRanger:
+    """Just enough of Ranger's policy API for reconciliation."""
+
+    def __init__(self, policies: list[dict[str, Any]]) -> None:
+        self.policies = {i: {**p, "id": i} for i, p in enumerate(policies, start=1)}
+
+    def get(self, url: str, params: dict[str, Any], auth: Any, timeout: int) -> _Response:
+        return _Response(list(self.policies.values()))  # type: ignore[arg-type]
+
+    def delete(self, url: str, auth: Any, timeout: int) -> _Response:
+        del self.policies[int(url.rsplit("/", 1)[1])]
+        return _Response({})
+
+    @property
+    def names(self) -> set[str]:
+        return {p["name"] for p in self.policies.values()}
+
+
+@pytest.fixture
+def ranger(monkeypatch: pytest.MonkeyPatch) -> Any:
+    import src.extractors.base as base
+
+    def install(policies: list[dict[str, Any]]) -> _FakeRanger:
+        fake = _FakeRanger(policies)
+        monkeypatch.setattr(base.requests, "get", fake.get)
+        monkeypatch.setattr(base.requests, "delete", fake.delete)
+        return fake
+
+    return install
+
+
+class TestReconciliation:
+    def test_a_revoked_grant_is_deleted_from_the_mirror(self, ranger: Any) -> None:
+        extractor = UnityCatalogExtractor()
+        before = extractor._merge_by_resource(
+            extractor._grants_to_ranger_policies(
+                [
+                    _uc_grant(ANALYST.name, "SELECT", "table", "risk", "exposures"),
+                    _uc_grant("auditor@example.com", "SELECT", "table", "risk", "positions"),
+                ]
+            )
+        )
+        fake = ranger([{**p, "service": "dev_trino"} for p in before])
+        after = extractor._merge_by_resource(
+            extractor._grants_to_ranger_policies(
+                [_uc_grant("auditor@example.com", "SELECT", "table", "risk", "positions")]
+            )
+        )
+        result = extractor.reconcile_removed([{**p, "service": "dev_trino"} for p in after])
+        assert len(result["deleted"]) == 1
+        assert fake.names == {p["name"] for p in after}
+
+    def test_other_sources_are_left_alone(self, ranger: Any) -> None:
+        fake = ranger([{"name": "sf_policy", "service": "dev_trino", "policyType": 0, "policyLabels": ["source:snowflake"]}])
+        UnityCatalogExtractor().reconcile_removed([])
+        assert fake.names == {"sf_policy"}
+
+    def test_removed_masking_and_deny_policies_are_reported_not_deleted(self, ranger: Any) -> None:
+        label = ["source:unity_catalog"]
+        fake = ranger(
+            [
+                {"name": "mask", "service": "dev_trino", "policyType": 1, "policyLabels": label},
+                {"name": "deny", "service": "dev_trino", "policyType": 0, "policyLabels": label, "denyPolicyItems": [{}]},
+            ]
+        )
+        result = UnityCatalogExtractor().reconcile_removed([])
+        assert result == {"deleted": [], "needs_review": ["mask", "deny"]}
+        assert fake.names == {"mask", "deny"}

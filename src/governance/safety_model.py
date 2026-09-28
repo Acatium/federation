@@ -19,6 +19,7 @@ tests can show both the safe configuration and the one that leaks.
 
 from __future__ import annotations
 
+import fnmatch
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
@@ -94,7 +95,7 @@ class SyncGapOutcome:
 def analyze_sync_gap(
     ranger_state: EnforcementState,
     platform_state: EnforcementState,
-    identity_mode: IdentityMode = IdentityMode.PASSTHROUGH,
+    identity_mode: IdentityMode,
     service_account_allows: bool = True,
 ) -> SyncGapOutcome:
     """Compute the safety outcome for a Ranger×Platform state combination.
@@ -103,7 +104,9 @@ def analyze_sync_gap(
     authoritative answer to "should this person see this data?". What the
     platform actually enforces depends on ``identity_mode``. With passthrough it
     evaluates the end user; with a shared service account it evaluates the
-    connector's credential, whose reach is ``service_account_allows``.
+    connector's credential, whose reach is ``service_account_allows``. There is
+    no default: this repository deploys shared service accounts, so every caller
+    has to say which configuration it is reasoning about.
 
     Access is granted when Ranger allows AND the platform check passes. Safety
     is computed from that, not asserted: an outcome is unsafe exactly when
@@ -117,10 +120,15 @@ def analyze_sync_gap(
 
     if access_granted and not authorized:
         outcome_type = "leak"
+        account = (
+            "the group's connector account"
+            if identity_mode is IdentityMode.PER_GROUP_ACCOUNT
+            else "the shared service account"
+        )
         explanation = (
-            "Ranger allows (stale) and the platform checks the shared service account, "
-            "which can read the data. The end user's revocation at the source is never "
-            "consulted, so data is exposed until Ranger syncs."
+            f"Ranger allows (stale) and the platform checks {account}, which can still "
+            "read the data. The end user's revocation at the source is never consulted, "
+            "so data is exposed until Ranger syncs."
         )
     elif access_granted:
         stale = EnforcementState.STALE_ALLOW in (ranger_state, platform_state)
@@ -186,7 +194,7 @@ class StalenessScenario:
     # False when the source has dropped the object: no credential can read it.
     source_object_exists: bool = True
 
-    def evaluate(self, identity_mode: IdentityMode = IdentityMode.PASSTHROUGH) -> SyncGapOutcome:
+    def evaluate(self, identity_mode: IdentityMode) -> SyncGapOutcome:
         return analyze_sync_gap(
             self.ranger_state,
             self.platform_state,
@@ -204,15 +212,6 @@ class StalenessScenario:
         if result.outcome_type in ("platform_backstop", "service_account_ceiling"):
             return "fail-safe"
         return "fail-closed"
-
-    @property
-    def outcome(self) -> str:
-        """Outcome with identity passthrough, the configuration the backstop assumes."""
-        return self.outcome_under(IdentityMode.PASSTHROUGH)
-
-    @property
-    def is_safe(self) -> bool:
-        return self.evaluate().is_safe
 
     def is_safe_under(self, identity_mode: IdentityMode) -> bool:
         return self.evaluate(identity_mode).is_safe
@@ -305,7 +304,13 @@ class PlatformGrant:
 
 
 def _match(values: list[str] | tuple[str, ...], value: str) -> bool:
-    return "*" in values or value in values
+    """Ranger resource matching: ``*`` and ``?`` wildcards, case-insensitive."""
+    return any(fnmatch.fnmatchcase(value.lower(), v.lower()) for v in values)
+
+
+def _resource_hits(resource: dict[str, Any], value: str) -> bool:
+    hit = _match(resource.get("values", []), value)
+    return not hit if resource.get("isExcludes") else hit
 
 
 def _item_hits(item: dict[str, Any], request: AccessRequest) -> bool:
@@ -325,8 +330,11 @@ def _item_hits(item: dict[str, Any], request: AccessRequest) -> bool:
 def ranger_decision(policies: list[dict[str, Any]], request: AccessRequest) -> bool:
     """Evaluate Ranger access policies, in the format the extractors push.
 
-    Deny items win over allow items, as in Ranger, and a request no policy
-    allows is denied. Table-level only: column resources are not evaluated.
+    Covers the subset of Ranger's evaluation these policies use: resource
+    wildcards and ``isExcludes``, allow and deny items with their exceptions,
+    deny winning over allow, and denial when nothing allows. Not covered: policy
+    conditions, validity schedules, zones, delegated admin, and column-level
+    resources (evaluation is per table).
     """
     allowed = False
     for policy in policies:
@@ -334,14 +342,20 @@ def ranger_decision(policies: list[dict[str, Any]], request: AccessRequest) -> b
             continue
         res = policy["resources"]
         if not (
-            _match(res["catalog"]["values"], request.catalog)
-            and _match(res["schema"]["values"], request.schema)
-            and _match(res["table"]["values"], request.table)
+            _resource_hits(res["catalog"], request.catalog)
+            and _resource_hits(res["schema"], request.schema)
+            and _resource_hits(res["table"], request.table)
         ):
             continue
-        if any(_item_hits(i, request) for i in policy.get("denyPolicyItems", [])):
+
+        def hits(items: str, exceptions: str) -> bool:
+            return any(_item_hits(i, request) for i in policy.get(items, [])) and not any(
+                _item_hits(i, request) for i in policy.get(exceptions, [])
+            )
+
+        if hits("denyPolicyItems", "denyExceptions"):
             return False
-        if any(_item_hits(i, request) for i in policy.get("policyItems", [])):
+        if hits("policyItems", "allowExceptions"):
             allowed = True
     return allowed
 
