@@ -84,7 +84,9 @@ class BaseExtractor(ABC):
         self._aborted: bool = False
         self._extraction_ts: str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         self._zones_configured: bool | None = None  # lazy-loaded
-        self._written_ids: set[int] = set()  # Ranger ids created or updated this run
+        # Ranger ids created or updated by this instance's last push_all; None until
+        # a push has run, so reconciliation cannot run against an empty record.
+        self._written_ids: set[int] | None = None
 
     # ------------------------------------------------------------------
     # Abstract interface
@@ -129,8 +131,13 @@ class BaseExtractor(ABC):
         return self._zones_configured
 
     def _record_written(self, policy_id: Any) -> None:
-        if isinstance(policy_id, int):
+        """Record a written policy. A write with no usable id counts as failed, so
+        reconciliation is skipped rather than deleting the policy it cannot see."""
+        if isinstance(policy_id, int) and self._written_ids is not None:
             self._written_ids.add(policy_id)
+            return
+        logger.warning("Ranger returned no usable policy id (%r); treating the write as failed", policy_id)
+        self.policies_failed += 1
 
     def push_policy(self, policy: dict[str, Any]) -> bool:
         """Create or update a single Ranger policy (idempotent by policy name).
@@ -328,9 +335,11 @@ class BaseExtractor(ABC):
             )
             resp.raise_for_status()
             page = resp.json()
-            policies.extend(page)
-            if len(page) < RANGER_PAGE_SIZE:
+            # Stop on an empty page, not a short one: the server may cap the page
+            # below the size asked for.
+            if not page:
                 return policies
+            policies.extend(page)
             start += len(page)
 
     def reconcile_removed(self, services: set[str] | None = None) -> dict[str, list[str]]:
@@ -349,6 +358,11 @@ class BaseExtractor(ABC):
 
         Returns ``{"deleted": [...], "needs_review": [...]}`` by policy name.
         """
+        if self._written_ids is None:
+            raise RuntimeError(
+                "reconcile_removed needs a completed push_all on this instance; "
+                "without one every policy from this source would look stale"
+            )
         label = f"source:{self.source_name}"
         result: dict[str, list[str]] = {"deleted": [], "needs_review": []}
         stale: list[dict[str, Any]] = []

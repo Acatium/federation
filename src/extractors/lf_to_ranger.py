@@ -28,17 +28,19 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Lake Formation permission -> Ranger access type mapping
+# Lake Formation permission -> Ranger access type. DESCRIBE is metadata only and
+# maps to Ranger's "show"; DATA_LOCATION_ACCESS lets a principal register tables on
+# a location and grants no read. Anything unlisted is skipped, never guessed as a read.
 LF_PERMISSION_MAP: dict[str, str] = {
     "ALL": "all",
     "SELECT": "select",
     "INSERT": "insert",
     "DELETE": "delete",
-    "DESCRIBE": "select",
+    "DESCRIBE": "show",
     "ALTER": "alter",
     "DROP": "drop",
     "CREATE_TABLE": "create",
     "CREATE_DATABASE": "create",
-    "DATA_LOCATION_ACCESS": "select",
 }
 
 
@@ -257,7 +259,10 @@ class LakeFormationExtractor(BaseExtractor):
         principal_grouped: dict[tuple[str, str], dict[str, Any]] = {}
         for g in grants:
             key = (g["table"], g["principal"])
-            ranger_access = LF_PERMISSION_MAP.get(g["privilege"], "select")
+            ranger_access = LF_PERMISSION_MAP.get(g["privilege"])
+            if ranger_access is None:
+                logger.info("Skipping LF permission %s on %s: no Ranger access", g["privilege"], g["table"])
+                continue
             if key not in principal_grouped:
                 principal_grouped[key] = {
                     "table": g["table"],

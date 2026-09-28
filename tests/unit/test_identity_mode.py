@@ -317,8 +317,11 @@ class _FakeRanger:
         if "policyName" in params:
             return _HTTP([p for p in found if p["name"] == params["policyName"]])
         start = int(params.get("startIndex", 0))
+        # Like ranger.db.maxrows.default: the server caps the page, whatever is asked.
         size = min(int(params.get("pageSize", self.page_size)), self.page_size)
         return _HTTP(sorted(found, key=lambda p: p["id"])[start : start + size])
+
+    omit_ids = False  # simulate a create that returns no usable id
 
     def post(self, url: str, json: dict[str, Any], auth: Any = None, timeout: int = 0) -> _HTTP:
         for existing in self.policies.values():
@@ -328,7 +331,7 @@ class _FakeRanger:
         policy = {**json, "id": self._next}
         self.policies[self._next] = policy
         self._next += 1
-        return _HTTP(policy)
+        return _HTTP({k: v for k, v in policy.items() if k != "id"} if self.omit_ids else policy)
 
     def put(self, url: str, json: dict[str, Any], auth: Any = None, timeout: int = 0) -> _HTTP:
         policy_id = int(url.rsplit("/", 1)[1])
@@ -387,13 +390,8 @@ class TestReconciliation:
         assert ranger.users_on("exposures") == set()
         assert ranger.users_on("positions") == {B}
 
-    def test_stale_policies_beyond_the_first_page_are_found(
-        self, ranger: _FakeRanger, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import src.extractors.base as base
-
-        monkeypatch.setattr(base, "RANGER_PAGE_SIZE", 2)
-        ranger.page_size = 2
+    def test_stale_policies_beyond_a_server_capped_page_are_found(self, ranger: _FakeRanger) -> None:
+        ranger.page_size = 2  # server caps below the 200 the client asks for
         tables = [f"t{i}" for i in range(5)]
         _sync([_uc_grant(A, "SELECT", "table", "risk", t) for t in tables])
         _sync([_uc_grant(A, "SELECT", "table", "risk", "t0")])
@@ -426,3 +424,26 @@ class TestReconciliation:
         before = [len(p["policyItems"]) for p in policies]
         extractor._merge_by_resource(policies)
         assert [len(p["policyItems"]) for p in policies] == before
+
+
+class TestReconciliationPreconditions:
+    def test_refuses_to_run_without_a_push(self, ranger: _FakeRanger) -> None:
+        ranger.policies[1] = {
+            "id": 1, "name": "uc_x", "service": "dev_trino", "policyType": 0,
+            "policyLabels": ["source:unity_catalog"], "resources": {"table": {"values": ["x"]}},
+        }
+        with pytest.raises(RuntimeError):
+            UnityCatalogExtractor().reconcile_removed({"dev_trino"})
+        assert 1 in ranger.policies
+
+    def test_a_write_without_an_id_counts_as_failed(self, ranger: _FakeRanger) -> None:
+        ranger.omit_ids = True
+        extractor = UnityCatalogExtractor()
+        extractor._check_zones_configured = lambda: False  # type: ignore[method-assign]
+        extractor._ensure_ranger_principals = lambda policies: None  # type: ignore[method-assign]
+        extractor.push_all(
+            [{**p, "service": "dev_trino"} for p in extractor._grants_to_ranger_policies(
+                [_uc_grant(A, "SELECT", "table", "risk", "exposures")]
+            )]
+        )
+        assert extractor.policies_failed == 1

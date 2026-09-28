@@ -35,6 +35,22 @@ what the user may see, so a revoked user keeps access until the mirror catches u
 policies the extractors produce and the platforms' current grants.
 `tests/unit/test_identity_mode.py` exercises both columns.
 
+### A second failure: several authorities over one resource
+
+A mirror also has to combine platforms that govern the same data. On AWS, reading a
+Lake Formation-governed table needs IAM and Lake Formation to allow it, and an Immuta
+policy sits on top of a platform's own grants: access is the intersection. Ranger holds one
+access policy per resource, so when each source pushes separately the second push
+overwrites the first. The last writer wins, and the result flips with the run order:
+contractors that only IAM allows get in when Glue/IAM runs last, and analysts that only
+Lake Formation allows get in when it runs last
+(`tests/unit/test_authority_conflicts.py`).
+
+`FederatedSync` (`src/sync/federated.py`) extracts every source together, combines
+access policies that share a resource into the intersection of what each source allows
+(keeping every deny), and pushes one policy set. If any source fails to extract, nothing
+is pushed.
+
 ## Comparing the alternatives
 
 A mirror is one of four ways to govern access across platforms. The others author policy
@@ -108,7 +124,10 @@ Estates differ in which patterns they can use at all:
    (`src/extractors/uc_to_ranger.py`); and each sync deletes this source's allow policies
    the platform no longer grants, while reporting removed masking and deny policies for
    review rather than deleting them (`BaseExtractor.reconcile_removed`).
-6. **Label what translation loses.** Immuta's purpose-based rules do not fit Ranger's role
+6. **Combine authorities by AND, in one pass.** Where two platforms govern the same data,
+   the mirror must allow only what both allow. Syncing sources one at a time into a
+   store that holds one policy per resource makes the last writer win.
+7. **Label what translation loses.** Immuta's purpose-based rules do not fit Ranger's role
    model; each policy carries labels for what was lost rather than dropping it silently.
 
 ## How it is built
@@ -186,7 +205,7 @@ src/
   extractors/   Platform grants → Ranger policies
   governance/   Safety model, request simulator, pattern comparison
   reports/      Entitlement matrix, report generator
-  sync/         Sync intervals, priority order, drift detection
+  sync/         Federated sync (AND across sources), sync intervals, drift detection
   arrow/        Arrow Flight SQL / ADBC connectors and benchmarks
   loaders/      Deterministic test data (seed=42)
   models/       Bedrock model catalog (simulated offline)

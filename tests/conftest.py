@@ -160,7 +160,7 @@ def trino_conn() -> Iterator[Any]:
 
     host = os.getenv("TRINO_HOST", "")
     if not host:
-        pytest.skip("TRINO_HOST not configured")
+        pytest.fail("TRINO_HOST not configured")
     port = int(os.getenv("TRINO_PORT", "8080"))
     logger.info("Connecting to Trino at %s:%s", host, port)
     conn = trino.dbapi.connect(
@@ -180,7 +180,7 @@ def restricted_trino_conn() -> Iterator[Any]:
 
     host = os.getenv("TRINO_HOST", "")
     if not host:
-        pytest.skip("TRINO_HOST not configured")
+        pytest.fail("TRINO_HOST not configured")
     port = int(os.getenv("TRINO_PORT", "8080"))
     logger.info("Connecting to Trino as restricted_user at %s:%s", host, port)
     conn = trino.dbapi.connect(
@@ -200,7 +200,7 @@ def redshift_conn() -> Iterator[Any]:
 
     host = os.getenv("REDSHIFT_HOST", "")
     if not host:
-        pytest.skip("REDSHIFT_HOST not configured")
+        pytest.fail("REDSHIFT_HOST not configured")
     logger.info("Connecting to Redshift at %s", host)
     conn = psycopg2.connect(
         host=host,
@@ -225,7 +225,7 @@ def snowflake_conn() -> Iterator[Any]:
 
     account = os.getenv("SNOWFLAKE_ACCOUNT", "")
     if not account:
-        pytest.skip("SNOWFLAKE_ACCOUNT not configured")
+        pytest.fail("SNOWFLAKE_ACCOUNT not configured")
     logger.info("Connecting to Snowflake account %s", account)
     conn = snowflake.connector.connect(
         account=account,
@@ -266,7 +266,7 @@ def ranger_auth() -> tuple[str, str]:
 def ranger_policies(ranger_base_url: str, ranger_auth: tuple[str, str]) -> list[dict[str, Any]]:
     """Fetch all Ranger policies for the dev_trino service."""
     if not os.getenv("RANGER_HOST", ""):
-        pytest.skip("RANGER_HOST not configured")
+        pytest.fail("RANGER_HOST not configured")
     url = f"{ranger_base_url}/service/public/v2/api/policy"
     params = {"serviceName": "dev_trino"}
     try:
@@ -277,7 +277,7 @@ def ranger_policies(ranger_base_url: str, ranger_auth: tuple[str, str]) -> list[
         return policies
     except requests.RequestException as exc:
         logger.warning("Could not fetch Ranger policies: %s", exc)
-        pytest.skip(f"Ranger unreachable: {exc}")
+        pytest.fail(f"Ranger unreachable: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +298,7 @@ def gravitino_base_url() -> str:
 def gravitino_metalake(gravitino_base_url: str) -> dict[str, Any]:
     """Fetch the 'federation' metalake metadata from Gravitino."""
     if not os.getenv("GRAVITINO_HOST", ""):
-        pytest.skip("GRAVITINO_HOST not configured")
+        pytest.fail("GRAVITINO_HOST not configured")
     url = f"{gravitino_base_url}/api/metalakes/federation"
     try:
         resp = requests.get(url, timeout=30)
@@ -308,14 +308,14 @@ def gravitino_metalake(gravitino_base_url: str) -> dict[str, Any]:
         return data
     except requests.RequestException as exc:
         logger.warning("Could not contact Gravitino: %s", exc)
-        pytest.skip(f"Gravitino unreachable: {exc}")
+        pytest.fail(f"Gravitino unreachable: {exc}")
 
 
 @pytest.fixture(scope="session")
 def gravitino_catalogs(gravitino_base_url: str) -> list[str]:
     """List catalog names registered in the 'federation' metalake."""
     if not os.getenv("GRAVITINO_HOST", ""):
-        pytest.skip("GRAVITINO_HOST not configured")
+        pytest.fail("GRAVITINO_HOST not configured")
     url = f"{gravitino_base_url}/api/metalakes/federation/catalogs"
     try:
         resp = requests.get(url, timeout=30)
@@ -328,7 +328,7 @@ def gravitino_catalogs(gravitino_base_url: str) -> list[str]:
         return names
     except requests.RequestException as exc:
         logger.warning("Could not list Gravitino catalogs: %s", exc)
-        pytest.skip(f"Gravitino catalogs unavailable: {exc}")
+        pytest.fail(f"Gravitino catalogs unavailable: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +370,7 @@ def s3_bucket() -> str:
     """Return the S3 bucket name for Parquet/Spectrum data."""
     bucket = os.getenv("S3_BUCKET", "")
     if not bucket:
-        pytest.skip("S3_BUCKET not configured")
+        pytest.fail("S3_BUCKET not configured")
     return bucket
 
 
@@ -530,7 +530,7 @@ def iceberg_catalog_name() -> str:
 def require_spark(spark_session: Any) -> Any:
     """Skip test if Spark session is unavailable (no JARs or no Gravitino)."""
     if spark_session is None:
-        pytest.skip("Spark session unavailable (missing JARs or GRAVITINO_HOST)")
+        pytest.fail("Spark session unavailable (missing JARs or GRAVITINO_HOST)")
     return spark_session
 
 
@@ -812,7 +812,7 @@ def _provision_multi_identity(
 ) -> None:
     """Ensure persona users exist with correct group memberships in Ranger."""
     if not os.getenv("RANGER_HOST", ""):
-        pytest.skip("RANGER_HOST not configured")
+        pytest.fail("RANGER_HOST not configured")
 
     persona_users = list(_PERSONA_MEMBERSHIPS.keys())
 
@@ -834,7 +834,7 @@ def analyst_trino_conn(_provision_multi_identity: None) -> Iterator[Any]:
 
     host = os.getenv("TRINO_HOST", "")
     if not host:
-        pytest.skip("TRINO_HOST not configured")
+        pytest.fail("TRINO_HOST not configured")
     port = int(os.getenv("TRINO_PORT", "8080"))
     conn = trino.dbapi.connect(host=host, port=port, user="alice_analyst")
     yield conn
@@ -848,7 +848,7 @@ def risk_investigator_trino_conn(_provision_multi_identity: None) -> Iterator[An
 
     host = os.getenv("TRINO_HOST", "")
     if not host:
-        pytest.skip("TRINO_HOST not configured")
+        pytest.fail("TRINO_HOST not configured")
     port = int(os.getenv("TRINO_PORT", "8080"))
     conn = trino.dbapi.connect(host=host, port=port, user="bob_risk")
     yield conn
@@ -862,7 +862,7 @@ def compliance_trino_conn(_provision_multi_identity: None) -> Iterator[Any]:
 
     host = os.getenv("TRINO_HOST", "")
     if not host:
-        pytest.skip("TRINO_HOST not configured")
+        pytest.fail("TRINO_HOST not configured")
     port = int(os.getenv("TRINO_PORT", "8080"))
     conn = trino.dbapi.connect(host=host, port=port, user="carol_compliance")
     yield conn
@@ -876,7 +876,7 @@ def auditor_trino_conn(_provision_multi_identity: None) -> Iterator[Any]:
 
     host = os.getenv("TRINO_HOST", "")
     if not host:
-        pytest.skip("TRINO_HOST not configured")
+        pytest.fail("TRINO_HOST not configured")
     port = int(os.getenv("TRINO_PORT", "8080"))
     conn = trino.dbapi.connect(host=host, port=port, user="frank_external")
     yield conn
