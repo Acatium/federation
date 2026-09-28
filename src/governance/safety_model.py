@@ -49,10 +49,14 @@ class IdentityMode(Enum):
     caught at the source. With SERVICE_ACCOUNT the connector logs in with one
     shared credential (``connection-user`` in the Trino catalog files under
     ``deploy/trino-config/``), so the platform only checks what that account can
-    reach: a ceiling, not a per-user backstop.
+    reach: a ceiling, not a per-user backstop. PER_GROUP_ACCOUNT sits between:
+    one connector credential per group or sensitivity tier, so the ceiling is the
+    group's access, and the platform catches revocations of the whole group but
+    not of one person inside it.
     """
 
     PASSTHROUGH = "passthrough"
+    PER_GROUP_ACCOUNT = "per_group_account"
     SERVICE_ACCOUNT = "service_account"
 
 

@@ -35,22 +35,66 @@ what the user may see, so a revoked user keeps access until the mirror catches u
 policies the extractors produce and the platforms' current grants.
 `tests/unit/test_identity_mode.py` exercises both columns.
 
+## Comparing the alternatives
+
+A mirror is one of four ways to govern access across platforms. The others author policy
+centrally and push it into each platform's native controls, make one catalog the authority
+(Iceberg REST with credential vending), or enforce in the query engine through a policy
+engine such as OPA or Ranger's plugin.
+
+`src/governance/patterns.py` compares them on one event: a person's access is revoked at
+the source of truth. How long can they still read the data? The timings are example
+assumptions (15-minute batch sync, 30-second event feed, 60-second push and decision cache,
+one-hour vended credentials); change them in `Timings` and regenerate the table with
+`python -m src.governance.patterns`.
+
+| Pattern | Passthrough | Per-group accounts | Shared account |
+|---|---|---|---|
+| Mirror, batch sync | 0 | ≤ 15 min (avg 7.5 min) | ≤ 15 min (avg 7.5 min) |
+| Mirror, event-driven sync | 0 | 30 s | 30 s |
+| Push down to native controls | 60 s | **never** | **never** |
+| Catalog as authority | ≤ 60 min (avg 30 min) | **never** | **never** |
+| Enforce in the engine | ≤ 60 s (avg 30 s) | ≤ 60 s (avg 30 s) | ≤ 60 s (avg 30 s) |
+
+The identity the connector presents decides the result more than the pattern does.
+Push-down and catalog policies are written for people; when the query arrives as a shared
+account, they never match the revoked person. Enforcing in the engine, where the person is
+still visible, bounds exposure whatever credential the engine uses downstream, and a mirror
+feeding the engine inherits that bound plus its sync window.
+
+Estates differ in which patterns they can use at all:
+
+| Pattern | Open formats | Cloud warehouses | On-prem databases | Mainframe | Blind spot |
+|---|---|---|---|---|---|
+| Mirror platform grants into one policy store | Yes | Yes (Snowflake, Redshift extractors here) | Yes, from grant views (Oracle `DBA_TAB_PRIVS`, DB2 `SYSCAT.TABAUTH`, SQL Server `sys.database_permissions`) | DB2 for z/OS catalog grants; RACF profiles for IMS and VSAM | Visibility, not enforcement: safe per person only with passthrough |
+| Author centrally, push down to native controls | Yes (Unity Catalog ABAC, Polaris RBAC) | Yes (row access and masking policies; Redshift RLS and masking) | Where native row and column controls exist (Oracle VPD, DB2 RCAC, SQL Server RLS) | DB2 for z/OS RCAC; IMS and VSAM only at RACF dataset level | Anything native controls cannot express; shared-account paths |
+| One catalog is the authority | Yes: the pattern's home | Through Iceberg tables, or as foreign catalogs behind one connection credential | As foreign catalogs behind one connection credential | No | Everything not registered in the catalog |
+| Enforce in the query engine | Yes | Yes, for queries through the engine | Yes, for queries through the engine | Where a connector exists | Applications that connect to the source directly |
+
 ## What it means for a platform team
 
-1. **Pass the user's identity through to every platform, or treat the mirror as an
-   enforcement point.** Passthrough means per-user source credentials for the JDBC
-   connectors (Redshift, Snowflake) and per-user sessions for Unity Catalog credential
-   vending. Without it, the mirror's sync latency and correctness are security controls
-   and need the scrutiny of any other.
-2. **Never let the mirror grant more than the source.** Privileges with no data-access
+1. **Enforce where the person is still visible.** With identity passthrough to every
+   platform, push-down or a catalog authority closes a revocation quickly. With shared
+   connector accounts, which most brownfield estates depend on, only the engine (or a
+   mirror feeding it) can cut off one person.
+2. **Treat the sync window as a security control.** Feed the mirror from each platform's
+   grant-change records (CloudTrail for Lake Formation, Unity Catalog's audit system table,
+   Snowflake's account-usage views) rather than a schedule, and give connectors one account
+   per group or sensitivity tier so the platform's ceiling is the group's access, not
+   everyone's.
+3. **Choose by estate.** Open-format estates suit a catalog authority. Brownfield estates
+   need push-down where native row and column controls exist, a mirror for visibility
+   everywhere else, and the engine as the enforcement point for cross-platform queries.
+4. **Govern the paths around the engine.** Direct application connections and reads from
+   object storage with static credentials bypass every control above. Vended, scoped
+   credentials keep the platform's enforcement in the path (`ARROW_TRANSPORTS` in the
+   safety model).
+5. **Never let the mirror grant more than the source.** Privileges with no data-access
    meaning, such as `BROWSE` and `MANAGE`, map to nothing, and an extraction that cannot
    read every grant is refused rather than pushed half-complete
    (`src/extractors/uc_to_ranger.py`).
-3. **Label what translation loses.** Immuta's purpose-based rules do not fit Ranger's role
+6. **Label what translation loses.** Immuta's purpose-based rules do not fit Ranger's role
    model; each policy carries labels for what was lost rather than dropping it silently.
-4. **Govern the paths around the engine.** Direct reads from object storage with static
-   credentials bypass every control above. Vended, scoped credentials keep the platform's
-   enforcement in the path (`ARROW_TRANSPORTS` in the safety model).
 
 ## How it is built
 
@@ -125,7 +169,7 @@ Without the stack, the live suites fail at fixture setup rather than skip.
 ```
 src/
   extractors/   Platform grants → Ranger policies
-  governance/   Safety model and request simulator
+  governance/   Safety model, request simulator, pattern comparison
   reports/      Entitlement matrix, report generator
   sync/         Sync intervals, priority order, drift detection
   arrow/        Arrow Flight SQL / ADBC connectors and benchmarks
