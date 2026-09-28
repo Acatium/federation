@@ -288,71 +288,141 @@ class TestUnityCatalogPermissionPages:
 # ---------------------------------------------------------------------------
 
 
+class _HTTP:
+    def __init__(self, payload: Any = None, status: int = 200, text: str = "") -> None:
+        self._payload, self.status_code, self.text = payload, status, text
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise requests.HTTPError(self.text, response=self)  # type: ignore[arg-type]
+
+    def json(self) -> Any:
+        return self._payload
+
+
 class _FakeRanger:
-    """Just enough of Ranger's policy API for reconciliation."""
+    """Ranger's public v2 policy API, as push and reconcile use it.
 
-    def __init__(self, policies: list[dict[str, Any]]) -> None:
-        self.policies = {i: {**p, "id": i} for i, p in enumerate(policies, start=1)}
+    Like Ranger, it pages policy searches and rejects a second policy for the
+    same resources with a 400 naming the existing policy.
+    """
 
-    def get(self, url: str, params: dict[str, Any], auth: Any, timeout: int) -> _Response:
-        return _Response(list(self.policies.values()))  # type: ignore[arg-type]
+    def __init__(self, page_size: int = 200) -> None:
+        self.policies: dict[int, dict[str, Any]] = {}
+        self.page_size = page_size
+        self._next = 1
 
-    def delete(self, url: str, auth: Any, timeout: int) -> _Response:
+    def get(self, url: str, params: dict[str, Any], auth: Any = None, timeout: int = 0) -> _HTTP:
+        found = [p for p in self.policies.values() if p.get("service") == params.get("serviceName")]
+        if "policyName" in params:
+            return _HTTP([p for p in found if p["name"] == params["policyName"]])
+        start = int(params.get("startIndex", 0))
+        size = min(int(params.get("pageSize", self.page_size)), self.page_size)
+        return _HTTP(sorted(found, key=lambda p: p["id"])[start : start + size])
+
+    def post(self, url: str, json: dict[str, Any], auth: Any = None, timeout: int = 0) -> _HTTP:
+        for existing in self.policies.values():
+            if existing["resources"] == json["resources"] and existing.get("service") == json.get("service"):
+                msg = f"Another policy already exists for matching resource: policy-name=[{existing['name']}]"
+                return _HTTP(status=400, text=msg)
+        policy = {**json, "id": self._next}
+        self.policies[self._next] = policy
+        self._next += 1
+        return _HTTP(policy)
+
+    def put(self, url: str, json: dict[str, Any], auth: Any = None, timeout: int = 0) -> _HTTP:
+        policy_id = int(url.rsplit("/", 1)[1])
+        self.policies[policy_id] = {**json, "id": policy_id}
+        return _HTTP(self.policies[policy_id])
+
+    def delete(self, url: str, auth: Any = None, timeout: int = 0) -> _HTTP:
         del self.policies[int(url.rsplit("/", 1)[1])]
-        return _Response({})
+        return _HTTP({})
 
-    @property
-    def names(self) -> set[str]:
-        return {p["name"] for p in self.policies.values()}
+    def users_on(self, table: str) -> set[str]:
+        return {
+            user
+            for p in self.policies.values()
+            if table in p["resources"]["table"]["values"]
+            for item in p.get("policyItems", [])
+            for user in item.get("users", [])
+        }
 
 
 @pytest.fixture
-def ranger(monkeypatch: pytest.MonkeyPatch) -> Any:
+def ranger(monkeypatch: pytest.MonkeyPatch) -> _FakeRanger:
     import src.extractors.base as base
 
-    def install(policies: list[dict[str, Any]]) -> _FakeRanger:
-        fake = _FakeRanger(policies)
-        monkeypatch.setattr(base.requests, "get", fake.get)
-        monkeypatch.setattr(base.requests, "delete", fake.delete)
-        return fake
+    fake = _FakeRanger()
+    for verb in ("get", "post", "put", "delete"):
+        monkeypatch.setattr(base.requests, verb, getattr(fake, verb))
+    return fake
 
-    return install
+
+def _sync(grants: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """One extractor run: push the merged policies, then reconcile."""
+    extractor = UnityCatalogExtractor()
+    extractor._check_zones_configured = lambda: False  # type: ignore[method-assign]
+    extractor._ensure_ranger_principals = lambda policies: None  # type: ignore[method-assign]
+    policies = [{**p, "service": "dev_trino"} for p in extractor._grants_to_ranger_policies(grants)]
+    extractor.push_all(policies)
+    assert extractor.policies_failed == 0
+    return extractor.reconcile_removed({"dev_trino"})
+
+
+A, B = "a@example.com", "b@example.com"
 
 
 class TestReconciliation:
-    def test_a_revoked_grant_is_deleted_from_the_mirror(self, ranger: Any) -> None:
-        extractor = UnityCatalogExtractor()
-        before = extractor._merge_by_resource(
-            extractor._grants_to_ranger_policies(
-                [
-                    _uc_grant(ANALYST.name, "SELECT", "table", "risk", "exposures"),
-                    _uc_grant("auditor@example.com", "SELECT", "table", "risk", "positions"),
-                ]
-            )
-        )
-        fake = ranger([{**p, "service": "dev_trino"} for p in before])
-        after = extractor._merge_by_resource(
-            extractor._grants_to_ranger_policies(
-                [_uc_grant("auditor@example.com", "SELECT", "table", "risk", "positions")]
-            )
-        )
-        result = extractor.reconcile_removed([{**p, "service": "dev_trino"} for p in after])
+    def test_revoking_the_first_named_grantee_keeps_the_others_policy(self, ranger: _FakeRanger) -> None:
+        _sync([_uc_grant(A, "SELECT", "table", "risk", "exposures"), _uc_grant(B, "SELECT", "table", "risk", "exposures")])
+        assert ranger.users_on("exposures") == {A, B}
+        _sync([_uc_grant(B, "SELECT", "table", "risk", "exposures")])
+        assert ranger.users_on("exposures") == {B}
+
+    def test_a_resources_last_grant_disappearing_deletes_its_policy(self, ranger: _FakeRanger) -> None:
+        _sync([_uc_grant(A, "SELECT", "table", "risk", "exposures"), _uc_grant(B, "SELECT", "table", "risk", "positions")])
+        result = _sync([_uc_grant(B, "SELECT", "table", "risk", "positions")])
         assert len(result["deleted"]) == 1
-        assert fake.names == {p["name"] for p in after}
+        assert ranger.users_on("exposures") == set()
+        assert ranger.users_on("positions") == {B}
 
-    def test_other_sources_are_left_alone(self, ranger: Any) -> None:
-        fake = ranger([{"name": "sf_policy", "service": "dev_trino", "policyType": 0, "policyLabels": ["source:snowflake"]}])
-        UnityCatalogExtractor().reconcile_removed([])
-        assert fake.names == {"sf_policy"}
+    def test_stale_policies_beyond_the_first_page_are_found(
+        self, ranger: _FakeRanger, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import src.extractors.base as base
 
-    def test_removed_masking_and_deny_policies_are_reported_not_deleted(self, ranger: Any) -> None:
+        monkeypatch.setattr(base, "RANGER_PAGE_SIZE", 2)
+        ranger.page_size = 2
+        tables = [f"t{i}" for i in range(5)]
+        _sync([_uc_grant(A, "SELECT", "table", "risk", t) for t in tables])
+        _sync([_uc_grant(A, "SELECT", "table", "risk", "t0")])
+        assert [t for t in tables if ranger.users_on(t)] == ["t0"]
+
+    def test_other_sources_are_left_alone(self, ranger: _FakeRanger) -> None:
+        ranger.policies[99] = {
+            "id": 99, "name": "sf", "service": "dev_trino", "policyType": 0,
+            "policyLabels": ["source:snowflake"], "resources": {"table": {"values": ["x"]}},
+        }
+        _sync([_uc_grant(A, "SELECT", "table", "risk", "exposures")])
+        assert 99 in ranger.policies
+
+    def test_removed_masking_and_deny_policies_are_reported_not_deleted(self, ranger: _FakeRanger) -> None:
         label = ["source:unity_catalog"]
-        fake = ranger(
-            [
-                {"name": "mask", "service": "dev_trino", "policyType": 1, "policyLabels": label},
-                {"name": "deny", "service": "dev_trino", "policyType": 0, "policyLabels": label, "denyPolicyItems": [{}]},
-            ]
+        ranger.policies[98] = {"id": 98, "name": "mask", "service": "dev_trino", "policyType": 1, "policyLabels": label, "resources": {}}
+        ranger.policies[97] = {
+            "id": 97, "name": "deny", "service": "dev_trino", "policyType": 0,
+            "policyLabels": label, "denyPolicyItems": [{}], "resources": {},
+        }
+        result = _sync([_uc_grant(A, "SELECT", "table", "risk", "exposures")])
+        assert sorted(result["needs_review"]) == ["deny", "mask"]
+        assert {97, 98} <= set(ranger.policies)
+
+    def test_merging_does_not_mutate_its_input(self) -> None:
+        extractor = UnityCatalogExtractor()
+        policies = extractor._grants_to_ranger_policies(
+            [_uc_grant(A, "SELECT", "table", "risk", "exposures"), _uc_grant(B, "SELECT", "table", "risk", "exposures")]
         )
-        result = UnityCatalogExtractor().reconcile_removed([])
-        assert result == {"deleted": [], "needs_review": ["mask", "deny"]}
-        assert fake.names == {"mask", "deny"}
+        before = [len(p["policyItems"]) for p in policies]
+        extractor._merge_by_resource(policies)
+        assert [len(p["policyItems"]) for p in policies] == before

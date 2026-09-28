@@ -144,7 +144,7 @@ class TestSafeByDefault:
         password = os.getenv("DEMO_ANALYST_PASSWORD", "")
         trino_host = os.getenv("TRINO_HOST", "")
         if not password or not trino_host:
-            pytest.skip("DEMO_ANALYST_PASSWORD and TRINO_HOST are required")
+            pytest.fail("DEMO_ANALYST_PASSWORD and TRINO_HOST are required for the live leak proof")
         if any(c in password for c in ("'", ";", "--", "/*")):
             pytest.fail("DEMO_ANALYST_PASSWORD contains disallowed characters")
 
