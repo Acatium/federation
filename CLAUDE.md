@@ -29,9 +29,10 @@ Every dataset tagged in Gravitino: `governance_tier: "platform_native" | "immuta
 
 ## Architecture Safety Property ("Safe by Default")
 
-- Over-permissive Ranger (stale allow): Platform-native enforcement is the backstop
+- Over-permissive Ranger (stale allow): Platform-native enforcement is the backstop,
+  per user only with identity passthrough; through a shared service account it leaks
 - Under-permissive Ranger (stale deny): User blocked until sync — fail-closed
-- "The sync gap creates noise, not risk"
+- Identity mode is part of the safety model (`IdentityMode` in `src/governance/safety_model.py`)
 
 ## Build & Test
 

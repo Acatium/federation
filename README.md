@@ -8,7 +8,7 @@ Redshift, Spectrum), **Databricks** (Unity Catalog), and **Snowflake** via
 platforms can get one catalog, one policy view, and one audit trail *above* them without
 replacing anything.
 
-~10K lines: six policy extractors, a computed safety model, and 82 unit tests that run
+~10K lines: six policy extractors, a computed safety model, and 103 unit tests that run
 offline in CI. End-to-end scenarios need a 6-container stack plus live AWS, Snowflake, and
 Databricks accounts. Two integrations are simulated; see [Known gaps](#known-gaps).
 
@@ -18,7 +18,7 @@ Databricks accounts. Two integrations are simulated; see [Known gaps](#known-gap
 
 | Tier | What | Runs without infra? |
 |------|------|---------------------|
-| **`tests/unit/`** | 82 unit tests — extractor logic, drift detection, sync config, entitlement matrix, the **regulatory *unit* checks**, and the **safe-by-default safety matrix** (`tests/unit/test_safety_model.py`) | **Yes** — no DB, network, or cloud creds. Run in CI. |
+| **`tests/unit/`** | 103 unit tests — extractor logic, drift detection, sync config, entitlement matrix, the **regulatory *unit* checks**, and the **safe-by-default safety matrix** (`tests/unit/test_safety_model.py`) | **Yes** — no DB, network, or cloud creds. Run in CI. |
 | **`tests/positive/`** (UC-1…UC-11) | Catalog/query/Spectrum/enforcement proof-points | **No** — need Trino + Ranger + Gravitino + cloud data |
 | **`tests/regulatory/`** | BCBS 239 / DORA / GDPR / SOX-CCAR scenarios | **No** — need the live stack; they `pytest.skip` or **error** without it |
 | **`tests/validation/`** (88 tests) | The S1–S4 + conclusion narrative suite | **No** — need the full 6-container stack + cloud creds |
@@ -46,13 +46,13 @@ make test
   of it for unified visibility and audit; the source platforms remain the enforcement
   backstop.
 
-- **A computed "safe-by-default" safety model** (`src/governance/safety_model.py`). Access
-  requires *both* Ranger and the platform to allow (logical AND), so a stale Ranger policy
-  can create noise but not a data leak: stale-allow is caught by the platform backstop,
-  stale-deny fails closed. The model **computes** the outcome for every Ranger×platform
-  state rather than asserting it — and `tests/unit/test_safety_model.py` exercises all four
-  sync-gap quadrants, the staleness scenarios, and the per-engine governance stacks
-  **offline**.
+- **A computed safety model** (`src/governance/safety_model.py`). Access requires *both*
+  Ranger and the platform to allow (logical AND). Whether that makes a stale Ranger policy
+  harmless depends on **whose identity the platform checks**, so identity mode is part of
+  the model: the outcome is computed per request, from real Ranger policies and platform
+  grants, under identity passthrough and under a shared service account. The tests show
+  both the configuration that holds and the one that leaks
+  (`tests/unit/test_identity_mode.py`).
 
 - **Six real policy extractors → one canonical Ranger schema** (`src/extractors/`):
   Lake Formation, Glue/IAM, Redshift, Snowflake, Unity Catalog, and Immuta each normalize
@@ -66,8 +66,14 @@ make test
 ## What I learned
 
 - **Mirror, don't replace.** Making Ranger the canonical *mirror* (not the enforcement
-  authority) is what makes the federation layer safe to add on top of existing platforms —
-  the platforms stay the backstop, so a sync gap degrades to noise, not risk.
+  authority) is what makes the federation layer safe to add on top of existing platforms,
+  as long as the platforms stay a real backstop.
+
+- **The backstop is only as good as the identity the platform sees.** Federation engines
+  usually reach each platform through one service credential. The platform then checks
+  what that account can reach, not what the user may see, so a stale allow in the mirror
+  becomes a leak. Mirroring is safe per user only with identity passthrough; with shared
+  credentials the platform is a ceiling, and the mirror has to be treated as enforcing.
 
 - **Translation loss must be labeled, not hidden.** Immuta's purpose-based ABAC can't be
   fully represented in Ranger's RBAC model; the lossy parts are explicitly labeled and
@@ -92,8 +98,12 @@ Drawn from the `TestHonestGaps` class and the `SIMULATION NOTE`s in the code:
   Gravitino is unreachable. So of the eight extractor classes, **six** read from real
   platform APIs and **two** are deterministic generators.
 
-- **Identity is local, not enterprise.** Tests run as a local Trino user, not AD/LDAP;
-  identity *propagation* works, but enterprise SSO integration is operational future work
+- **Connectors use shared service credentials.** Every Trino catalog here logs in with one
+  account per platform (`deploy/trino-config/*.properties`), so as deployed the platforms
+  are a ceiling, not a per-user backstop; `tests/unit/test_identity_mode.py` shows the
+  resulting leak. Per-user enforcement needs passthrough: per-user source credentials for
+  the JDBC connectors, and per-user sessions for Unity Catalog credential vending. Users
+  are local Trino users, not an enterprise IdP
   (`TestHonestGaps.test_identity_is_local_not_enterprise`).
 
 - **The regulatory proof-points (BCBS 239 / DORA / GDPR / SOX-CCAR) do not run offline.**
@@ -109,15 +119,17 @@ GOVERNANCE  Ranger                    canonical policy store + unified audit
 CATALOG     Gravitino                 federated metadata across all platforms
 ```
 
-**Safe by default.** Ranger and the platform are independent layers; access needs both
-(logical AND):
+**Safe by default, with identity passthrough.** Ranger and the platform are independent
+layers; access needs both (logical AND):
 
-- **Stale allow** — Ranger permits on outdated policy, but the source platform denies
-  natively → failed query, not data leak.
-- **Stale deny** — a new grant exists at the platform, but Ranger hasn't synced → user
-  blocked until sync. Fail-closed.
+- **Stale allow**: Ranger permits on outdated policy. With passthrough the source platform
+  denies the user natively → failed query, not data leak. Through a shared service account
+  the platform allows the account → **data leak** until Ranger syncs.
+- **Stale deny**: a new grant exists at the platform, but Ranger hasn't synced → user
+  blocked until sync. Fail-closed in either mode.
 
-> The sync gap creates noise, not risk.
+> With passthrough, the sync gap creates noise, not risk. Without it, the mirror is the
+> only per-user control.
 
 ## Policy Extractors
 
@@ -130,7 +142,7 @@ two more are deterministic generators (clearly labeled):
 | `glue_iam_to_ranger` | Glue resource policies + IAM (`GetResourcePolicies` + `SimulatePrincipalPolicy`) | Real |
 | `redshift_to_ranger` | Redshift RBAC (`svv_relation_privileges`) | Real |
 | `snowflake_to_ranger` | Snowflake RBAC + masking (`SHOW GRANTS`/`SHOW MASKING POLICIES`) | Real |
-| `uc_to_ranger` | Unity Catalog (`databricks-sdk` grants API) | Real |
+| `uc_to_ranger` | Unity Catalog (permissions REST API) | Real |
 | `immuta_to_ranger` | Immuta ABAC (REST) | Real pipeline, **mock-backed** source |
 | `iceberg_gap_fill` | S3 Iceberg cold tier | **Simulated** (deterministic gap-fill) |
 | `bedrock_to_ranger` | Bedrock models | **Simulated** (mirror policies) |
@@ -154,7 +166,7 @@ src/
   utils/        Shared config and SQL safety
 
 tests/
-  unit/         Offline unit tests (82) — incl. the safe-by-default safety matrix
+  unit/         Offline unit tests (103) — incl. the safe-by-default safety matrix
   positive/     UC-1…UC-11 — require the live stack
   regulatory/   BCBS 239, DORA, GDPR, SOX-CCAR, safe-by-default — require the live stack
   validation/   S1–S4 + conclusion narrative suite (88) — require the full stack
@@ -167,13 +179,17 @@ notebooks/      Demo notebooks (safe-by-default, spectrum proof-point, governanc
 ## Key Design Decisions
 
 1. **Ranger mirrors, platforms enforce.** Ranger is the canonical policy store for
-   visibility and audit; source platforms remain the enforcement backstop.
-2. **Lossy translation is documented, not hidden.** Immuta's purpose-based ABAC can't be
+   visibility and audit; source platforms remain the enforcement backstop, per user only
+   where the connector passes the user's identity through.
+2. **The mirror never grants more than the source.** Unmapped Unity Catalog privileges
+   (`BROWSE`, `MANAGE`, ...) grant nothing, and an extraction that cannot read every grant
+   is refused rather than pushed as a partial mirror.
+3. **Lossy translation is documented, not hidden.** Immuta's purpose-based ABAC can't be
    fully represented in Ranger's RBAC model — the semantic loss is labeled and tracked.
-3. **Arrow governs at the boundary.** Arrow Flight SQL → Trino is governed; direct S3 Arrow
+4. **Arrow governs at the boundary.** Arrow Flight SQL → Trino is governed; direct S3 Arrow
    reads with static IAM bypass Trino governance — a documented tradeoff
    (`src/governance/safety_model.py` `ARROW_TRANSPORTS`).
-4. **Deterministic test data.** Generated data uses `seed=42` for reproducibility.
+5. **Deterministic test data.** Generated data uses `seed=42` for reproducibility.
 
 ## License
 

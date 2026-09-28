@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 import requests as http_requests
@@ -22,7 +23,10 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Unity Catalog privilege -> Ranger access type mapping
+# Unity Catalog privilege -> Ranger access type mapping. Only privileges listed
+# here become Ranger access; anything else (BROWSE, MANAGE, APPLY_TAG,
+# EXTERNAL_USE_SCHEMA, ...) is skipped rather than guessed, so the mirror never
+# grants more than the source does.
 UC_PRIVILEGE_MAP: dict[str, str] = {
     "USE_CATALOG": "use",
     "USE_SCHEMA": "use",
@@ -43,6 +47,24 @@ UC_PRIVILEGE_MAP: dict[str, str] = {
     "READ_VOLUME": "select",
     "WRITE_VOLUME": "insert",
 }
+
+
+# Service principals appear in grants by application ID.
+_APPLICATION_ID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+)
+
+# Unity Catalog list endpoints return at most this many items per page.
+_PAGE_SIZE = 1000
+
+
+class ExtractionIncompleteError(RuntimeError):
+    """Unity Catalog could not be read in full; pushing a partial mirror is refused."""
+
+
+def _is_user(principal: str) -> bool:
+    """Users are emails and service principals are application IDs; the rest are groups."""
+    return "@" in principal or bool(_APPLICATION_ID.match(principal))
 
 
 class UnityCatalogExtractor(BaseExtractor):
@@ -76,6 +98,27 @@ class UnityCatalogExtractor(BaseExtractor):
         resp = self._session.get(url, params=params, timeout=30)
         resp.raise_for_status()
         return resp.json()
+
+    def _api_list(self, path: str, key: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        """GET every page of a Unity Catalog list endpoint."""
+        items: list[dict[str, Any]] = []
+        page: dict[str, Any] = {**params, "max_results": _PAGE_SIZE}
+        while True:
+            data = self._api_get(path, params=page)
+            items.extend(data.get(key, []))
+            token = data.get("next_page_token")
+            if not token:
+                return items
+            page = {**page, "page_token": token}
+
+    def _permissions(self, securable: str, full_name: str) -> dict[str, Any]:
+        """Read one securable's grants, or refuse to continue with a partial picture."""
+        try:
+            return self._api_get(f"/permissions/{securable}/{full_name}")
+        except http_requests.RequestException as exc:
+            raise ExtractionIncompleteError(
+                f"could not read {securable} permissions for {full_name!r}: {exc}"
+            ) from exc
 
     # ------------------------------------------------------------------
     # Core extraction
@@ -121,166 +164,92 @@ class UnityCatalogExtractor(BaseExtractor):
 
     def _discover_schemas(self) -> list[str]:
         """List schemas in the catalog."""
-        schemas: list[str] = []
         try:
-            data = self._api_get(
-                "/schemas", params={"catalog_name": self.catalog}
-            )
-            for schema in data.get("schemas", []):
-                name = schema.get("name", "")
-                # Skip internal schemas
-                if name not in ("information_schema", "default"):
-                    schemas.append(name)
-            logger.info(
-                "Discovered %d schemas in catalog '%s': %s",
-                len(schemas),
-                self.catalog,
-                schemas,
+            listed = self._api_list(
+                "/schemas", "schemas", {"catalog_name": self.catalog}
             )
         except http_requests.RequestException as exc:
-            logger.warning("Could not list UC schemas: %s", exc)
-            schemas = ["default"]
+            raise ExtractionIncompleteError(
+                f"could not list schemas in catalog {self.catalog!r}: {exc}"
+            ) from exc
+        # information_schema is system-generated and carries no grants.
+        schemas = [
+            s.get("name", "") for s in listed if s.get("name") != "information_schema"
+        ]
+        logger.info(
+            "Discovered %d schemas in catalog '%s': %s",
+            len(schemas),
+            self.catalog,
+            schemas,
+        )
         return schemas
 
     def _discover_tables(self, schema: str) -> list[str]:
         """List tables in a schema."""
-        tables: list[str] = []
         try:
-            data = self._api_get(
+            listed = self._api_list(
                 "/tables",
-                params={
-                    "catalog_name": self.catalog,
-                    "schema_name": schema,
-                },
-            )
-            for tbl in data.get("tables", []):
-                tables.append(tbl.get("name", ""))
-            logger.info(
-                "Discovered %d tables in '%s.%s': %s",
-                len(tables),
-                self.catalog,
-                schema,
-                tables,
+                "tables",
+                {"catalog_name": self.catalog, "schema_name": schema},
             )
         except http_requests.RequestException as exc:
-            logger.warning(
-                "Could not list tables in schema '%s.%s': %s",
-                self.catalog,
-                schema,
-                exc,
-            )
+            raise ExtractionIncompleteError(
+                f"could not list tables in {self.catalog}.{schema}: {exc}"
+            ) from exc
+        tables = [t.get("name", "") for t in listed]
+        logger.info(
+            "Discovered %d tables in '%s.%s': %s",
+            len(tables),
+            self.catalog,
+            schema,
+            tables,
+        )
         return tables
 
     def _get_catalog_permissions(self) -> list[dict[str, Any]]:
-        """Get permissions on the catalog."""
-        grants: list[dict[str, Any]] = []
-        try:
-            data = self._api_get(f"/permissions/catalog/{self.catalog}")
-            for assignment in data.get("privilege_assignments", []):
-                principal = assignment.get("principal", "")
-                for priv in assignment.get("privileges", []):
-                    # Handle both string and dict privilege formats
-                    if isinstance(priv, dict):
-                        privilege = priv.get("privilege", "")
-                        inherited = priv.get("inherited_from_type")
-                    else:
-                        privilege = str(priv)
-                        inherited = None
-                    grants.append(
-                        {
-                            "principal": principal,
-                            "privilege": privilege,
-                            "catalog": self.catalog,
-                            "schema": "*",
-                            "table": "*",
-                            "columns": ["*"],
-                            "level": "catalog",
-                            "inherited": inherited,
-                            "source": "unity_catalog",
-                        }
-                    )
-        except http_requests.RequestException as exc:
-            logger.warning(
-                "Could not get catalog permissions for '%s': %s",
-                self.catalog,
-                exc,
-            )
-        return grants
+        """Get permissions on the catalog; they apply to every schema and table in it."""
+        return self._grants("catalog", self.catalog, schema="*", table="*")
 
     def _get_schema_permissions(self, schema: str) -> list[dict[str, Any]]:
-        """Get permissions on a schema."""
-        grants: list[dict[str, Any]] = []
-        full_name = f"{self.catalog}.{schema}"
-        try:
-            data = self._api_get(f"/permissions/schema/{full_name}")
-            for assignment in data.get("privilege_assignments", []):
-                principal = assignment.get("principal", "")
-                for priv in assignment.get("privileges", []):
-                    # Handle both string and dict privilege formats
-                    if isinstance(priv, dict):
-                        privilege = priv.get("privilege", "")
-                        inherited = priv.get("inherited_from_type")
-                    else:
-                        privilege = str(priv)
-                        inherited = None
-                    grants.append(
-                        {
-                            "principal": principal,
-                            "privilege": privilege,
-                            "catalog": self.catalog,
-                            "schema": schema,
-                            "table": "*",
-                            "columns": ["*"],
-                            "level": "schema",
-                            "inherited": inherited,
-                            "source": "unity_catalog",
-                        }
-                    )
-        except http_requests.RequestException as exc:
-            logger.debug(
-                "Could not get schema permissions for '%s': %s",
-                full_name,
-                exc,
-            )
-        return grants
+        """Get permissions on a schema; they apply to every table in it."""
+        return self._grants("schema", f"{self.catalog}.{schema}", schema=schema, table="*")
 
     def _get_table_permissions(
         self, schema: str, table: str
     ) -> list[dict[str, Any]]:
         """Get permissions on a table."""
+        return self._grants(
+            "table", f"{self.catalog}.{schema}.{table}", schema=schema, table=table
+        )
+
+    def _grants(
+        self, level: str, full_name: str, *, schema: str, table: str
+    ) -> list[dict[str, Any]]:
         grants: list[dict[str, Any]] = []
-        full_name = f"{self.catalog}.{schema}.{table}"
-        try:
-            data = self._api_get(f"/permissions/table/{full_name}")
-            for assignment in data.get("privilege_assignments", []):
-                principal = assignment.get("principal", "")
-                for priv in assignment.get("privileges", []):
-                    # Handle both string and dict privilege formats
-                    if isinstance(priv, dict):
-                        privilege = priv.get("privilege", "")
-                        inherited = priv.get("inherited_from_type")
-                    else:
-                        privilege = str(priv)
-                        inherited = None
-                    grants.append(
-                        {
-                            "principal": principal,
-                            "privilege": privilege,
-                            "catalog": self.catalog,
-                            "schema": schema,
-                            "table": table,
-                            "columns": ["*"],
-                            "level": "table",
-                            "inherited": inherited,
-                            "source": "unity_catalog",
-                        }
-                    )
-        except http_requests.RequestException as exc:
-            logger.debug(
-                "Could not get table permissions for '%s': %s",
-                full_name,
-                exc,
-            )
+        data = self._permissions(level, full_name)
+        for assignment in data.get("privilege_assignments", []):
+            principal = assignment.get("principal", "")
+            for priv in assignment.get("privileges", []):
+                # Handle both string and dict privilege formats
+                if isinstance(priv, dict):
+                    privilege = priv.get("privilege", "")
+                    inherited = priv.get("inherited_from_type")
+                else:
+                    privilege = str(priv)
+                    inherited = None
+                grants.append(
+                    {
+                        "principal": principal,
+                        "privilege": privilege,
+                        "catalog": self.catalog,
+                        "schema": schema,
+                        "table": table,
+                        "columns": ["*"],
+                        "level": level,
+                        "inherited": inherited,
+                        "source": "unity_catalog",
+                    }
+                )
         return grants
 
     # ------------------------------------------------------------------
@@ -298,7 +267,13 @@ class UnityCatalogExtractor(BaseExtractor):
 
         for g in grants:
             key = (g["schema"], g["table"], g["principal"], g["level"])
-            ranger_access = UC_PRIVILEGE_MAP.get(g["privilege"], "select")
+            ranger_access = UC_PRIVILEGE_MAP.get(g["privilege"])
+            if ranger_access is None:
+                logger.info(
+                    "Skipping UC privilege %s on %s.%s for %s: no Ranger data access",
+                    g["privilege"], g["schema"], g["table"], g["principal"],
+                )
+                continue
 
             if key not in grouped:
                 grouped[key] = {
@@ -325,26 +300,18 @@ class UnityCatalogExtractor(BaseExtractor):
                 .replace("@", "_at_")
                 .lower()
             )
-            safe_schema = schema.replace(".", "_").lower()
-            safe_table = table.replace(".", "_").lower()
+            safe_schema = schema.replace(".", "_").replace("*", "all").lower()
+            safe_table = table.replace(".", "_").replace("*", "all").lower()
             policy_name = (
                 f"uc_{safe_schema}_{safe_table}_{safe_principal}_{level}"
             )
 
-            # Databricks principals: users are emails, groups are plain names,
-            # service principals start with "sp-" or are UUIDs
-            is_group = (
-                "@" not in principal
-                and not principal.startswith("sp-")
-                and principal != "account users"
-            )
-
             users: list[str] = []
             groups: list[str] = []
-            if is_group or principal == "account users":
-                groups.append(principal)
-            else:
+            if _is_user(principal):
                 users.append(principal)
+            else:
+                groups.append(principal)
 
             accesses = [
                 {"type": a, "isAllowed": True} for a in sorted(agg["accesses"])
@@ -366,7 +333,7 @@ class UnityCatalogExtractor(BaseExtractor):
                 groups=groups,
                 accesses=accesses,
                 extra_labels=extra_labels,
-                schema=schema if schema != "*" else "default",
+                schema=schema,
             )
             policies.append(policy)
 
