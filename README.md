@@ -8,14 +8,9 @@ Redshift, Spectrum), **Databricks** (Unity Catalog), and **Snowflake** via
 platforms can get one catalog, one policy view, and one audit trail *above* them without
 replacing anything.
 
-> **What this is — read first.** This is a **learn-by-doing AI-engineering experiment**
-> exploring federated data governance, not a hardened product. The core code is real
-> (~10K LOC of policy extractors + a computed safety model), and a meaningful slice runs and
-> is tested **offline**. But the headline end-to-end claims (cross-platform queries,
-> regulatory proof-points) require a **6-container Docker stack + live AWS / Snowflake /
-> Databricks credentials**, and two of the integrations are deliberately mock/simulated.
-> This README states plainly what runs offline vs. what needs infrastructure, and where the
-> mocks are — the spirit of the repo's own `TestHonestGaps` class, pulled up front.
+~10K lines: six policy extractors, a computed safety model, and 82 unit tests that run
+offline in CI. End-to-end scenarios need a 6-container stack plus live AWS, Snowflake, and
+Databricks accounts. Two integrations are simulated; see [Known gaps](#known-gaps).
 
 ---
 
@@ -29,11 +24,8 @@ replacing anything.
 | **`tests/validation/`** (88 tests) | The S1–S4 + conclusion narrative suite | **No** — need the full 6-container stack + cloud creds |
 | **`tests/performance/`** | Benchmarks | **No** |
 
-> **Honest note on graceful skipping:** the offline `tests/unit/` suite is clean. The
-> `tests/validation/`, `tests/regulatory/`, and `tests/positive/` tiers do **not** all skip
-> gracefully on a fresh clone — without the stack, many **error or fail** at fixture setup
-> (e.g. when Trino/Ranger/Gravitino are unreachable), they don't merely show as "skipped."
-> Treat `tests/unit/` as the only suite that's green without infrastructure.
+Without the stack, the `positive`, `regulatory`, and `validation` tiers error at fixture
+setup rather than skip. Only `tests/unit/` is green on a fresh clone.
 
 ```bash
 # The offline suite (this is what CI runs):
@@ -85,13 +77,9 @@ make test
   computing the outcome for every enforcement-state combination (and unit-testing it) is
   what makes the claim checkable.
 
-- **Honest gaps beat a polished demo.** The repo keeps a `TestHonestGaps` class
-  (`tests/validation/test_conclusion.py`) documenting its own limits — that instinct is the
-  right one, and this README pulls it to the front (below).
+## Known gaps
 
-## Honest gaps (what is *not* fully real here)
-
-Pulled up from `TestHonestGaps` and the `SIMULATION NOTE`s in the code:
+Drawn from the `TestHonestGaps` class and the `SIMULATION NOTE`s in the code:
 
 - **Immuta is mock-backed.** The extraction pipeline produces valid Ranger-format policies
   end-to-end, but it reads from a mock Immuta API (`src/mocks/immuta_mock.py`); **live Immuta
@@ -110,11 +98,7 @@ Pulled up from `TestHonestGaps` and the `SIMULATION NOTE`s in the code:
 
 - **The regulatory proof-points (BCBS 239 / DORA / GDPR / SOX-CCAR) do not run offline.**
   They live in `tests/regulatory/` and `tests/validation/` and require the live stack +
-  cloud credentials. The repository previously committed a generated `data/test_results.json`
-  showing all 88 validation tests "passed" with **empty log arrays** — that's a capture
-  artifact, not standalone evidence, so it (and the generated `reports/federation-report.html`)
-  are no longer tracked; they regenerate when you actually run the validation suite against
-  the stack via `make test`.
+  cloud credentials. `make test` generates their results; none are committed.
 
 ## Architecture
 
