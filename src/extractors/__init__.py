@@ -5,7 +5,8 @@ policies, normalises them into Ranger's canonical policy schema with provenance
 labels, and pushes them to Ranger via its REST API.
 
 All extractors are idempotent — running twice produces the same Ranger state.
-Extraction order is determined by source priority (highest first) from SyncConfig.
+All sources are synced together through FederatedSync, which combines sources
+that govern the same resource by AND (see src/sync/federated.py).
 """
 
 from __future__ import annotations
@@ -22,7 +23,6 @@ from src.extractors.uc_to_ranger import UnityCatalogExtractor
 from src.extractors.immuta_to_ranger import ImmutaExtractor
 from src.extractors.iceberg_gap_fill import IcebergGapFillExtractor
 from src.extractors.bedrock_to_ranger import BedrockExtractor
-from src.sync.config import SyncConfig
 
 logger = logging.getLogger(__name__)
 
@@ -41,18 +41,21 @@ __all__ = [
 
 
 def run_all_extractors() -> dict[str, dict[str, Any]]:
-    """Run all extractors ordered by priority and write the consolidated contract.
+    """Extract every source, combine them by AND, and push the result once.
 
-    Extractors are ordered by descending source priority from SyncConfig,
-    so that higher-priority sources (e.g., Immuta) run first and their
-    policies take precedence in Ranger when resources overlap.
+    Sources can govern the same resource: Lake Formation and Glue/IAM both write
+    the hive catalog, and an Immuta policy sits over a platform's own grants.
+    Pushed one after another, the last writer would win each shared resource,
+    whatever the priority order. ``FederatedSync`` combines shared resources
+    into the intersection of what every source allows and pushes one policy
+    set. If any source fails to extract, nothing is pushed.
 
     Returns:
-        Dict mapping source_name to extraction summary.
+        Dict mapping "federated_sync" to the sync summary.
     """
-    config = SyncConfig.from_env()
-    logger.info("Starting all policy extractors (priority-ordered)")
+    from src.sync.federated import FederatedSync
 
+    logger.info("Starting federated policy sync across all extractors")
     extractors: list[BaseExtractor] = [
         ImmutaExtractor(),
         LakeFormationExtractor(),
@@ -63,34 +66,8 @@ def run_all_extractors() -> dict[str, dict[str, Any]]:
         IcebergGapFillExtractor(),
         BedrockExtractor(),
     ]
-
-    # Sort by descending priority
-    extractors.sort(
-        key=lambda e: config.get_priority(e.source_name),
-        reverse=True,
-    )
-
-    summaries: list[dict[str, Any]] = []
-    for extractor in extractors:
-        try:
-            summary = extractor.extract_and_push()
-            summaries.append(summary)
-        except Exception as exc:
-            logger.error(
-                "Extractor %s failed fatally: %s",
-                extractor.source_name,
-                exc,
-            )
-            summaries.append(
-                {
-                    "source": extractor.source_name,
-                    "status": "error",
-                    "error": str(exc),
-                    "policies_extracted": 0,
-                    "policies_pushed": 0,
-                }
-            )
-
-    BaseExtractor.write_contract(summaries)
-    logger.info("All extractors complete. Contract written.")
-    return {s["source"]: s for s in summaries}
+    sync = FederatedSync({e.source_name: e.extract_policies for e in extractors})
+    summary = sync.extract_and_push()
+    BaseExtractor.write_contract([summary])
+    logger.info("Federated sync complete (%s). Contract written.", summary.get("status"))
+    return {summary["source"]: summary}

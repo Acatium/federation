@@ -7,6 +7,7 @@ concrete extractors inherit from BaseExtractor.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -49,6 +50,8 @@ RANGER_AUTH: tuple[str, str] = (
 )
 RANGER_SERVICE: str = os.getenv("RANGER_SERVICE", "dev_trino")
 RANGER_API: str = f"{RANGER_BASE_URL}/service/public/v2/api"
+# Ranger's policy search returns one page (server default ranger.db.maxrows.default).
+RANGER_PAGE_SIZE: int = 200
 
 # Table inventory — sanitised names used across all extractors
 DEMO_DATABASE: str = "federation_demo"
@@ -81,6 +84,9 @@ class BaseExtractor(ABC):
         self._aborted: bool = False
         self._extraction_ts: str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         self._zones_configured: bool | None = None  # lazy-loaded
+        # Ranger ids created or updated by this instance's last push_all; None until
+        # a push has run, so reconciliation cannot run against an empty record.
+        self._written_ids: set[int] | None = None
 
     # ------------------------------------------------------------------
     # Abstract interface
@@ -123,6 +129,15 @@ class BaseExtractor(ABC):
             self._zones_configured = False
 
         return self._zones_configured
+
+    def _record_written(self, policy_id: Any) -> None:
+        """Record a written policy. A write with no usable id counts as failed, so
+        reconciliation is skipped rather than deleting the policy it cannot see."""
+        if isinstance(policy_id, int) and self._written_ids is not None:
+            self._written_ids.add(policy_id)
+            return
+        logger.warning("Ranger returned no usable policy id (%r); treating the write as failed", policy_id)
+        self.policies_failed += 1
 
     def push_policy(self, policy: dict[str, Any]) -> bool:
         """Create or update a single Ranger policy (idempotent by policy name).
@@ -182,6 +197,7 @@ class BaseExtractor(ABC):
                     )
                     post_resp.raise_for_status()
                     new_id = post_resp.json().get("id", "?")
+                    self._record_written(new_id)
                     logger.info(
                         "Recreated policy id=%s name='%s' (type %d→%d)",
                         new_id, policy_name, old_type, new_type,
@@ -195,6 +211,7 @@ class BaseExtractor(ABC):
                         timeout=30,
                     )
                     put_resp.raise_for_status()
+                    self._record_written(policy_id)
                     logger.info("Updated Ranger policy id=%s name='%s'", policy_id, policy_name)
             else:
                 # Create new policy
@@ -238,6 +255,7 @@ class BaseExtractor(ABC):
                                     timeout=30,
                                 )
                                 put_resp.raise_for_status()
+                                self._record_written(cid)
                                 logger.info(
                                     "Updated conflicting policy id=%s name='%s'",
                                     cid,
@@ -250,6 +268,7 @@ class BaseExtractor(ABC):
                 else:
                     post_resp.raise_for_status()
                 new_id = post_resp.json().get("id", "?")
+                self._record_written(new_id)
                 logger.info("Created Ranger policy id=%s name='%s'", new_id, policy_name)
 
             self.policies_pushed += 1
@@ -281,6 +300,7 @@ class BaseExtractor(ABC):
         not save the drift snapshot on abort so the next run re-detects everything.
         """
         merged = self._merge_by_resource(policies)
+        self._written_ids = set()
         self._ensure_ranger_principals(merged)
         success = 0
         total = len(merged)
@@ -301,6 +321,81 @@ class BaseExtractor(ABC):
                 self._aborted = True
                 return success
         return success
+
+    def _list_policies(self, service: str) -> list[dict[str, Any]]:
+        """Every policy in ``service``, across Ranger's result pages."""
+        policies: list[dict[str, Any]] = []
+        start = 0
+        while True:
+            resp = requests.get(
+                f"{RANGER_API}/policy",
+                params={"serviceName": service, "startIndex": start, "pageSize": RANGER_PAGE_SIZE},
+                auth=RANGER_AUTH,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            page = resp.json()
+            # Stop on an empty page, not a short one: the server may cap the page
+            # below the size asked for.
+            if not page:
+                return policies
+            policies.extend(page)
+            start += len(page)
+
+    def _owned_labels(self) -> set[str]:
+        """Labels marking policies this extractor owns in Ranger."""
+        return {f"source:{self.source_name}"}
+
+    def reconcile_removed(self, services: set[str] | None = None) -> dict[str, list[str]]:
+        """Delete this source's allow policies that this run did not write.
+
+        Upserting alone cannot revoke everything. When a resource's last grant
+        disappears at the source, nothing is pushed for that resource, so its old
+        allow policy stays in Ranger indefinitely. After a fully successful push,
+        every policy this source should have was created or updated, and its
+        Ranger id recorded; any other policy labelled ``source:<this source>`` is
+        stale. Reconciling by id rather than by name matters: on a resource
+        conflict, ``push_policy`` updates the existing policy under its old name.
+
+        Only plain allow policies are deleted; removing a masking, row-filter or
+        deny policy would widen access, so those are reported for review.
+
+        Returns ``{"deleted": [...], "needs_review": [...]}`` by policy name.
+        """
+        if self._written_ids is None:
+            raise RuntimeError(
+                "reconcile_removed needs a completed push_all on this instance; "
+                "without one every policy from this source would look stale"
+            )
+        owned = self._owned_labels()
+        result: dict[str, list[str]] = {"deleted": [], "needs_review": []}
+        stale: list[dict[str, Any]] = []
+        for service in sorted((services or set()) | {RANGER_SERVICE}):
+            stale.extend(
+                p
+                for p in self._list_policies(service)
+                if owned & set(p.get("policyLabels", [])) and p.get("id") not in self._written_ids
+            )
+        for existing in stale:
+            if existing.get("policyType", 0) != 0 or existing.get("denyPolicyItems"):
+                result["needs_review"].append(existing["name"])
+                continue
+            requests.delete(
+                f"{RANGER_API}/policy/{existing['id']}",
+                auth=RANGER_AUTH,
+                timeout=30,
+            ).raise_for_status()
+            result["deleted"].append(existing["name"])
+        if result["deleted"] or result["needs_review"]:
+            logger.warning(
+                "Reconciled %s: deleted %d revoked allow policies; %d removed masking/deny "
+                "policies need review: %s",
+                self.source_name,
+                len(result["deleted"]),
+                len(result["needs_review"]),
+                result["needs_review"],
+            )
+        return result
 
     @staticmethod
     def _resource_key(policy: dict[str, Any]) -> tuple:
@@ -330,7 +425,7 @@ class BaseExtractor(ABC):
         for policy in policies:
             key = cls._resource_key(policy)
             if key not in grouped:
-                grouped[key] = dict(policy)  # shallow copy
+                grouped[key] = copy.deepcopy(policy)  # never mutate the caller's policies
                 # Ensure labels are combined
                 grouped[key].setdefault("policyLabels", [])
             else:
@@ -867,6 +962,15 @@ class BaseExtractor(ABC):
 
         self.push_all(policies)
 
+        # Remove what the source stopped granting. Only after a fully successful
+        # push: a failed write would otherwise look stale and be deleted. Also
+        # skipped when the extraction came back empty, which more likely means an
+        # outage than a platform with no grants at all.
+        reconciled: dict[str, list[str]] = {"deleted": [], "needs_review": []}
+        if policies and not self._aborted and self.policies_failed == 0:
+            services = {p.get("service", RANGER_SERVICE) for p in policies}
+            reconciled = self.reconcile_removed(services)
+
         # Only save snapshot if push was not aborted
         if not self._aborted:
             self._save_snapshot(policies)
@@ -882,6 +986,8 @@ class BaseExtractor(ABC):
             "policies_extracted": len(policies),
             "policies_pushed": self.policies_pushed,
             "policies_failed": self.policies_failed,
+            "policies_deleted": reconciled["deleted"],
+            "removed_policies_needing_review": reconciled["needs_review"],
             "extraction_ts": self._extraction_ts,
             "drift": drift,
         }

@@ -5,11 +5,12 @@ regulator — actually asks is: what happens when it breaks? When the
 policy mirror is stale? When someone bypasses the governed path? When
 access controls from different platforms conflict?
 
-The answer: the system fails safely. Every failure mode produces a
-secure outcome. Every limitation is documented honestly — not hidden.
-The sync gap creates noise, not risk. The governed path is the easy
-path. And when controls from different systems overlap or conflict,
-the result degrades data utility, never data security.
+The answer depends on identity. With identity passthrough, a stale
+mirror creates noise, not risk. As deployed here, Trino reaches each
+platform through one service account, so a stale allow exposes data
+until the mirror syncs; `test_stale_allow_leaks_through_the_shared_connector`
+observes that against live Redshift. When controls from different systems
+overlap or conflict, the result degrades data utility, not data security.
 """
 
 from __future__ import annotations
@@ -32,24 +33,25 @@ logger = logging.getLogger(__name__)
 
 
 class TestSafeByDefault:
-    """The sync gap creates noise, not risk."""
+    """Whether the sync gap is noise or risk depends on the identity the platform sees."""
 
-    def test_all_sync_gap_quadrants_produce_safe_outcomes(self) -> None:
-        """All 16 Ranger x Platform state combinations are safe.
+    def test_all_sync_gap_combinations_are_safe_with_passthrough(self) -> None:
+        """All 16 Ranger x Platform state combinations are safe under passthrough.
 
-        Exhaustive truth table: 4 Ranger states × 4 Platform states.
-        The AND-gate safety property must hold for every combination,
-        not just the 4 canonical quadrants.
+        Exhaustive truth table: 4 Ranger states × 4 Platform states, with the
+        platform evaluating the end user (IdentityMode.PASSTHROUGH). This is the
+        configuration the backstop needs, not the one deployed here.
         """
         from src.governance.safety_model import (
             EnforcementState,
+            IdentityMode,
             analyze_sync_gap,
         )
 
         unsafe: list[str] = []
         for ranger_state in EnforcementState:
             for platform_state in EnforcementState:
-                outcome = analyze_sync_gap(ranger_state, platform_state)
+                outcome = analyze_sync_gap(ranger_state, platform_state, IdentityMode.PASSTHROUGH)
                 if not outcome.is_safe:
                     unsafe.append(
                         f"({ranger_state.value}, {platform_state.value}): "
@@ -79,13 +81,32 @@ class TestSafeByDefault:
         assert len(unsafe) == 0, (
             f"Found unsafe quadrants: {unsafe}"
         )
-        logger.info("All 16 Ranger x Platform combinations verified safe")
+        logger.info("All 16 Ranger x Platform combinations safe under passthrough")
 
-    def test_stale_allow_blocked_by_platform(self) -> None:
-        """Ranger allows (stale) but platform denies -> blocked. Platform is backstop."""
-        from src.governance.safety_model import EnforcementState, analyze_sync_gap
+    def test_as_deployed_only_stale_allows_leak(self) -> None:
+        """With shared service accounts, exactly the Ranger-allow/user-denied cells leak."""
+        from src.governance.safety_model import (
+            EnforcementState,
+            IdentityMode,
+            analyze_sync_gap,
+        )
 
-        outcome = analyze_sync_gap(EnforcementState.STALE_ALLOW, EnforcementState.DENY)
+        allows = {EnforcementState.ALLOW, EnforcementState.STALE_ALLOW}
+        unsafe = {
+            (r, p)
+            for r in EnforcementState
+            for p in EnforcementState
+            if not analyze_sync_gap(r, p, IdentityMode.SERVICE_ACCOUNT).is_safe
+        }
+        assert unsafe == {(r, p) for r in allows for p in EnforcementState if p not in allows}
+
+    def test_stale_allow_blocked_by_platform_with_passthrough(self) -> None:
+        """Ranger allows (stale) but the platform denies the user -> blocked at source."""
+        from src.governance.safety_model import EnforcementState, IdentityMode, analyze_sync_gap
+
+        outcome = analyze_sync_gap(
+            EnforcementState.STALE_ALLOW, EnforcementState.DENY, IdentityMode.PASSTHROUGH
+        )
         assert outcome.outcome_type == "platform_backstop", (
             f"Expected platform_backstop, got {outcome.outcome_type}"
         )
@@ -93,15 +114,120 @@ class TestSafeByDefault:
         logger.info("Stale allow -> platform backstop: %s", outcome.explanation)
 
     def test_stale_deny_blocks_at_federation(self) -> None:
-        """Ranger denies (stale) but platform allows -> blocked until sync."""
-        from src.governance.safety_model import EnforcementState, analyze_sync_gap
+        """Ranger denies (stale) but platform allows -> blocked until sync, as deployed."""
+        from src.governance.safety_model import EnforcementState, IdentityMode, analyze_sync_gap
 
-        outcome = analyze_sync_gap(EnforcementState.STALE_DENY, EnforcementState.ALLOW)
+        outcome = analyze_sync_gap(
+            EnforcementState.STALE_DENY, EnforcementState.ALLOW, IdentityMode.SERVICE_ACCOUNT
+        )
         assert outcome.outcome_type == "fail_closed", (
             f"Expected fail_closed, got {outcome.outcome_type}"
         )
         assert outcome.access_granted is False, "Stale deny should NOT grant access"
         logger.info("Stale deny -> fail closed: %s", outcome.explanation)
+
+    @pytest.mark.slow
+    def test_stale_allow_leaks_through_the_shared_connector(self, redshift_conn: Any) -> None:
+        """Live: revoke at Redshift; Trino still returns rows until the Ranger sync, then refuses.
+
+        Trino's Redshift catalog logs in as one connection-user, so Redshift never
+        sees demo_analyst and does not check the revocation. This is the as-deployed
+        row of the safety model (IdentityMode.SERVICE_ACCOUNT), observed live.
+        """
+        import os
+
+        import psycopg2
+        import trino
+
+        from src.extractors.redshift_to_ranger import RedshiftExtractor
+
+        password = os.getenv("DEMO_ANALYST_PASSWORD", "")
+        trino_host = os.getenv("TRINO_HOST", "")
+        if not password or not trino_host:
+            pytest.fail("DEMO_ANALYST_PASSWORD and TRINO_HOST are required for the live leak proof")
+        if any(c in password for c in ("'", ";", "--", "/*")):
+            pytest.fail("DEMO_ANALYST_PASSWORD contains disallowed characters")
+
+        table = "federation.ledger_entries"
+        rs = redshift_conn.cursor()
+        try:
+            rs.execute("CREATE USER demo_analyst PASSWORD %s", (password,))
+            redshift_conn.commit()
+        except psycopg2.Error:
+            redshift_conn.rollback()  # already exists
+        rs.execute("GRANT USAGE ON SCHEMA federation TO demo_analyst")
+        rs.execute(f"GRANT SELECT ON {table} TO demo_analyst")
+        redshift_conn.commit()
+
+        # Sync the grant into Ranger, then wait for Trino's Ranger plugin to load it.
+        assert RedshiftExtractor().extract_and_push()["status"] == "complete"
+        analyst = trino.dbapi.connect(
+            host=trino_host,
+            port=int(os.getenv("TRINO_PORT", "8080")),
+            user="demo_analyst",
+            catalog="redshift",
+            schema="federation",
+        )
+
+        def federated_count() -> int:
+            cursor = analyst.cursor()
+            cursor.execute(f"SELECT count(*) FROM redshift.{table}")
+            return int(cursor.fetchone()[0])
+
+        deadline = time.monotonic() + 120
+        while True:
+            try:
+                before = federated_count()
+                break
+            except Exception:
+                if time.monotonic() > deadline:
+                    pytest.fail("Ranger never allowed demo_analyst after the sync")
+                time.sleep(5)
+
+        try:
+            # Revoke at the source. Ranger still holds the allow from the last sync.
+            rs.execute(f"REVOKE SELECT ON {table} FROM demo_analyst")
+            redshift_conn.commit()
+
+            # Redshift enforces the revocation for the person...
+            direct = psycopg2.connect(
+                host=os.getenv("REDSHIFT_HOST"),
+                port=int(os.getenv("REDSHIFT_PORT", "5439")),
+                database=os.getenv("REDSHIFT_DATABASE"),
+                user="demo_analyst",
+                password=password,
+                sslmode="require",
+            )
+            try:
+                with pytest.raises(psycopg2.Error):
+                    direct.cursor().execute(f"SELECT count(*) FROM {table}")
+            finally:
+                direct.close()
+
+            # ...but not for the connector, so the federated query still returns rows.
+            after = federated_count()
+            assert after == before > 0, (
+                f"Expected rows through the shared connector after revocation; got {after}"
+            )
+            logger.info(
+                "Revoked at Redshift, still read %d rows through Trino before the Ranger sync",
+                after,
+            )
+
+            # Sync: reconciliation deletes the revoked allow, and the query is refused.
+            assert RedshiftExtractor().extract_and_push()["status"] == "complete"
+            deadline = time.monotonic() + 120
+            while True:
+                try:
+                    federated_count()
+                except Exception as exc:
+                    logger.info("After the Ranger sync, Trino refuses demo_analyst: %s", exc)
+                    break
+                if time.monotonic() > deadline:
+                    pytest.fail("demo_analyst could still read through Trino after the sync")
+                time.sleep(5)
+        finally:
+            analyst.close()
 
     @pytest.mark.slow
     def test_unauthorized_user_denied_at_trino(

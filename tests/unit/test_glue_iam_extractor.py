@@ -10,7 +10,7 @@ import pytest
 from src.extractors.glue_iam_to_ranger import (
     GlueIamExtractor,
     _arn_to_ranger_principal,
-    _map_glue_action,
+    _map_glue_actions,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,44 +55,28 @@ class TestArnToRangerPrincipal:
         logger.info("IAM role with path -> Ranger group: groups=%s", groups)
 
 
-class TestMapGlueAction:
-    """Tests for _map_glue_action."""
+class TestMapGlueActions:
+    """Glue actions map to the Ranger access types they make possible."""
 
-    def test_get_table_maps_to_select(self) -> None:
-        """glue:GetTable maps to select."""
-        result = _map_glue_action("glue:GetTable")
-        assert result == "select"
-        logger.info("glue:GetTable -> %s", result)
+    def test_get_table_enables_select_and_show(self) -> None:
+        assert _map_glue_actions(["glue:GetTable"]) == ["select", "show"]
 
-    def test_create_table_maps_to_create(self) -> None:
-        """glue:CreateTable maps to create."""
-        result = _map_glue_action("glue:CreateTable")
-        assert result == "create"
-        logger.info("glue:CreateTable -> %s", result)
+    @pytest.mark.parametrize("action", ["glue:GetTables", "glue:GetDatabase", "glue:SearchTables"])
+    def test_listing_and_describe_calls_are_metadata_only(self, action: str) -> None:
+        assert _map_glue_actions([action]) == ["show"]
 
-    def test_update_table_maps_to_alter(self) -> None:
-        """glue:UpdateTable maps to alter."""
-        result = _map_glue_action("glue:UpdateTable")
-        assert result == "alter"
-        logger.info("glue:UpdateTable -> %s", result)
+    def test_partition_calls_grant_nothing_alone(self) -> None:
+        assert _map_glue_actions(["glue:GetPartitions", "glue:BatchGetPartition"]) == []
 
-    def test_delete_table_maps_to_drop(self) -> None:
-        """glue:DeleteTable maps to drop."""
-        result = _map_glue_action("glue:DeleteTable")
-        assert result == "drop"
-        logger.info("glue:DeleteTable -> %s", result)
+    @pytest.mark.parametrize(
+        ("action", "expected"),
+        [("glue:CreateTable", ["create"]), ("glue:UpdateTable", ["alter"]), ("glue:DeleteTable", ["drop"]), ("glue:*", ["all"])],
+    )
+    def test_write_actions(self, action: str, expected: list[str]) -> None:
+        assert _map_glue_actions([action]) == expected
 
-    def test_wildcard_maps_to_all(self) -> None:
-        """glue:* maps to all."""
-        result = _map_glue_action("glue:*")
-        assert result == "all"
-        logger.info("glue:* -> %s", result)
-
-    def test_unknown_action_defaults_to_select(self) -> None:
-        """Unknown action defaults to select."""
-        result = _map_glue_action("glue:SomeFutureAction")
-        assert result == "select"
-        logger.info("glue:SomeFutureAction (unknown) -> %s", result)
+    def test_unknown_actions_grant_nothing(self) -> None:
+        assert _map_glue_actions(["glue:SomeFutureAction", "glue:Get*"]) == []
 
 
 class TestGlueIamExtractorResourcePolicies:

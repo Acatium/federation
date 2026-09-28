@@ -14,10 +14,12 @@
 - **S2:** `test_row_count_matches_source` (count == count)
 - **S2:** `test_aggregation_matches_source_cent_for_cent` (SUM(amount) matches within 0.01)
 
-### Formalized safety property — all sync-gap combinations are safe by construction
-"We formalized the safety property with an exhaustive 16-combination truth table — 4 Ranger states x 4 Platform states. Every combination produces a safe outcome. The sync gap creates noise, not risk."
-- **S3:** `test_all_sync_gap_quadrants_produce_safe_outcomes` (16 computed outcomes, all safe)
-- **S3:** `test_stale_allow_blocked_by_platform` (platform_backstop)
+### The safety property depends on identity
+"The mirror is safe per user only when the platform sees the end user. With identity passthrough, all 16 Ranger x platform combinations are safe. With the shared service accounts deployed here, a stale allow exposes data until the next sync. We observed that against live Redshift."
+- **S3:** `test_all_sync_gap_combinations_are_safe_with_passthrough` (16 outcomes, passthrough)
+- **S3:** `test_as_deployed_only_stale_allows_leak` (shared accounts: the stale-allow cells leak)
+- **S3:** `test_stale_allow_leaks_through_the_shared_connector` (live: revoke at Redshift, rows still returned through Trino until the sync)
+- **S3:** `test_stale_allow_blocked_by_platform_with_passthrough` (platform_backstop)
 - **S3:** `test_stale_deny_blocks_at_federation` (fail_closed)
 - **S3:** `test_unauthorized_user_denied_at_trino` (live denial)
 - **Source:** `src/governance/safety_model.py`

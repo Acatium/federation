@@ -144,13 +144,16 @@ class TestSafeByDefault:
     # ------------------------------------------------------------------
 
     def test_safety_matrix_documented(self) -> None:
-        """Cross-regulation: All four sync-gap quadrants produce safe outcomes.
+        """Cross-regulation: all four sync-gap quadrants are safe with identity passthrough.
 
-        Uses safety_model.analyze_sync_gap() to compute (not hardcode)
-        the safety outcome for each Ranger×Platform state combination.
+        Uses safety_model.analyze_sync_gap() to compute the outcome for each
+        Ranger×Platform quadrant under IdentityMode.PASSTHROUGH. As deployed here
+        (shared service accounts) the over-permissive quadrant leaks; see
+        test_as_deployed_the_over_permissive_quadrant_leaks.
         """
         from src.governance.safety_model import (
             SYNC_GAP_QUADRANTS,
+            IdentityMode,
             analyze_sync_gap,
         )
 
@@ -159,7 +162,7 @@ class TestSafeByDefault:
         )
 
         for quadrant_name, (ranger_state, platform_state) in SYNC_GAP_QUADRANTS.items():
-            outcome = analyze_sync_gap(ranger_state, platform_state)
+            outcome = analyze_sync_gap(ranger_state, platform_state, IdentityMode.PASSTHROUGH)
             assert outcome.is_safe, (
                 f"Quadrant '{quadrant_name}' is NOT safe: {outcome.explanation}"
             )
@@ -173,9 +176,24 @@ class TestSafeByDefault:
             )
 
         logger.info(
-            "Safe-by-default: All %d safety quadrants verified via safety_model",
+            "Safe-by-default: All %d safety quadrants safe under passthrough",
             len(SYNC_GAP_QUADRANTS),
         )
+
+    def test_as_deployed_the_over_permissive_quadrant_leaks(self) -> None:
+        """Cross-regulation: with shared service accounts, a stale allow exposes data."""
+        from src.governance.safety_model import (
+            SYNC_GAP_QUADRANTS,
+            IdentityMode,
+            analyze_sync_gap,
+        )
+
+        unsafe = {
+            name
+            for name, (ranger, platform) in SYNC_GAP_QUADRANTS.items()
+            if not analyze_sync_gap(ranger, platform, IdentityMode.SERVICE_ACCOUNT).is_safe
+        }
+        assert unsafe == {"over_permissive_ranger"}
 
     # ------------------------------------------------------------------
     # Platform-native backstop
@@ -186,11 +204,13 @@ class TestSafeByDefault:
         self,
         redshift_conn: Any,
     ) -> None:
-        """DORA Art 9: Platform is the backstop — actively enforcing RBAC.
+        """DORA Art 9: the platform enforces RBAC for the connector's account.
 
-        Regulatory scenario: Even if the federation layer is compromised,
-        the source platform enforces its own access controls. We verify
-        Redshift RBAC is active by confirming the current user.
+        Regulatory scenario: even if the federation layer is compromised, the
+        source platform limits access to what the connector's account can reach.
+        That is a ceiling, not a per-user backstop: Redshift sees this account,
+        not the end user. We verify Redshift RBAC is active by confirming the
+        current user.
         """
         cursor = redshift_conn.cursor()
         cursor.execute("SELECT current_user")
